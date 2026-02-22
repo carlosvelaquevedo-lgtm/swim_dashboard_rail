@@ -3,6 +3,9 @@ import streamlit.components.v1 as components
 import base64
 import os
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # =============================================
 # PAGE CONFIG
 # =============================================
@@ -74,8 +77,13 @@ st.markdown("""
 # =============================================
 # CONFIG & SECRETS
 # =============================================
-STRIPE_PAYMENT_LINK = "https://buy.stripe.com/test_8x2eVdaBSe7mf2JaIEao800"
-IS_DEV = True
+import stripe
+
+STRIPE_PAYMENT_LINK = os.environ.get("STRIPE_PAYMENT_LINK", "")
+STRIPE_SECRET_KEY   = os.environ.get("STRIPE_SECRET_KEY", "")
+IS_DEV              = os.environ.get("IS_DEV", "false").lower() == "true"
+
+stripe.api_key = STRIPE_SECRET_KEY
 
 if "paid" not in st.session_state:
     st.session_state.paid = False
@@ -349,14 +357,24 @@ def show_landing_page():
 # MAIN ROUTER
 # =============================================
 q = st.query_params
-if q.get("success") == "true":
-    st.session_state.paid = True
-    st.query_params.clear()          
-    st.balloons()
-    st.rerun()                       
+
+if "session_id" in q and not st.session_state.paid:
+    session_id = q.get("session_id")
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+        if session.payment_status == "paid":
+            st.session_state.paid = True
+            st.query_params.clear()
+            st.balloons()
+            st.rerun()
+        else:
+            st.warning("Payment not completed. Please try again.")
+            st.query_params.clear()
+    except Exception:
+        st.error("Could not verify payment. Please contact support.")
+        st.query_params.clear()
 
 if st.session_state.paid:
-    # Ensure the path below matches your exact file structure
     st.switch_page("pages/2_Dashboard.py")
 else:
     show_landing_page()
