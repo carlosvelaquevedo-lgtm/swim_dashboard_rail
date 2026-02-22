@@ -2950,32 +2950,45 @@ def main():
     """, unsafe_allow_html=True)
     
     # ═══════════════════════════════════════════════════════════════
-    # PAYMENT GATING - Check if user has access
+    # PAYMENT GATING - Server-side Stripe verification
     # ═══════════════════════════════════════════════════════════════
-    # Payment gating - Use the same "paid" key as app.py
+    
+    # Step 1: Check for Stripe redirect with session_id
+    query_params = st.query_params
+    session_id = query_params.get("session_id")
+    
+    if session_id and not st.session_state.get("paid", False):
+        # Verify payment server-side via Stripe API
+        with st.spinner("Verifying payment..."):
+            if verify_stripe_payment(session_id):
+                st.session_state.paid = True
+                st.session_state.stripe_session_id = session_id
+                st.success("Payment verified! Loading dashboard...")
+                st.query_params.clear()
+            else:
+                st.error("Payment could not be verified. Please try again or contact support.")
+                st.query_params.clear()
+    elif query_params.get("payment") == "cancel":
+        st.warning("Payment cancelled. You can try again when you're ready.")
+        st.query_params.clear()
+    
+    # Step 2: Block access if not paid
     if not st.session_state.get("paid", False):
-        st.error("🔒 Access Denied")
+        st.error("Access Denied - Please complete payment")
         st.markdown("Please complete payment to access the swim analysis dashboard.")
+        
+        if not STRIPE_AVAILABLE:
+            st.warning("Payment verification is not configured. Set STRIPE_SECRET_KEY in Railway environment variables.")
         
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("← Back to Home", use_container_width=True):
+            if st.button("Back to Home", use_container_width=True):
                 st.switch_page("app.py")
                 
         with col2:
-            # st.link_button is the most reliable way to handle Stripe redirects
-            st.link_button("→ Go to Payment", STRIPE_PAYMENT_LINK, use_container_width=True, type="primary")
+            st.link_button("Go to Payment", STRIPE_PAYMENT_LINK, use_container_width=True, type="primary")
             
-        st.stop() 
-    # Handle success query param (from Stripe redirect)
-    query_params = st.query_params
-    if query_params.get("payment") == "success":
-        st.session_state.paid = True
-        st.success("Payment successful! Loading dashboard...")
-        st.query_params.clear()
-    elif query_params.get("payment") == "cancel":
-        st.warning("Payment cancelled. You can try again.")
-        st.query_params.clear()
+        st.stop()
 
     st.title("🏊 Freestyle Swim Technique Analyzer Pro v2")
     st.markdown("AI-powered analysis with **enhanced biomechanical metrics**")
