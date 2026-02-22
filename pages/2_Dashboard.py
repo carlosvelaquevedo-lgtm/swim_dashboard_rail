@@ -46,6 +46,20 @@ try:
 except ImportError:
     STRIPE_AVAILABLE = False
 
+def verify_stripe_payment(session_id: str) -> bool:
+    """Verify a Stripe Checkout session server-side."""
+    if not STRIPE_AVAILABLE:
+        return False
+    try:
+        stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
+        if not stripe.api_key:
+            return False
+        session = stripe.checkout.Session.retrieve(session_id)
+        return session.payment_status == "paid"
+    except Exception as e:
+        st.error(f"Stripe verification error: {e}")
+        return False
+
 # ─────────────────────────────────────────────
 # MEDIAPIPE TASKS API
 # ─────────────────────────────────────────────
