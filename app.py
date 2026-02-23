@@ -32,7 +32,9 @@ st.markdown("""
     [data-testid="stHeader"] {
         background: transparent !important;
     }
-
+    [data-testid="stSidebarNav"] {
+        display: none !important;
+    }
     .water-bg {
         position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0;
         pointer-events: none;
