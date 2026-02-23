@@ -10,6 +10,7 @@ from typing import List, Optional, Dict, Tuple
 import tempfile
 import os
 import datetime
+import logging
 import pandas as pd
 import matplotlib.pyplot as plt
 from collections import deque
@@ -40,8 +41,14 @@ except ImportError:
     PYAV_AVAILABLE = False
 IS_DEV = os.environ.get("IS_DEV", "false").lower() == "true"
 
+st.set_page_config(
+    page_title="SwimForm AI • Analysis",
+    page_icon="🏊",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 if not st.session_state.get("paid", False) and not IS_DEV:
-    st.set_page_config(page_title="SwimForm AI", page_icon="🏊")
     st.error("⛔ Access denied. Please complete payment to access the dashboard.")
     st.markdown("**[← Return to SwimForm AI](/)** to purchase your analysis.")
     st.stop()
@@ -63,7 +70,8 @@ def verify_stripe_payment(session_id: str) -> bool:
         session = stripe.checkout.Session.retrieve(session_id)
         return session.payment_status == "paid"
     except Exception as e:
-        st.error(f"Stripe verification error: {e}")
+        logging.error(f"Stripe verification error: {e}")
+        st.error("Payment verification failed. Please try again or contact support@swimform.ai.")
         return False
 
 # ─────────────────────────────────────────────
@@ -2932,13 +2940,6 @@ def create_results_bundle(video_path, csv_buf, pdf_buf, timestamp):
 # ─────────────────────────────────────────────
 
 def main():
-    st.set_page_config(
-        page_title="SwimForm AI • Analysis",
-        page_icon="🏊",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
     # Force reset any landing styles
     st.markdown("""
     <style>
@@ -3154,6 +3155,10 @@ def main():
     st.subheader("📹 Step 1: Upload Your Video")
     uploaded = st.file_uploader("Upload swimming video", type=["mp4", "mov", "avi", "MOV", "MP4", "AVI"])
 
+    if uploaded and len(uploaded.getvalue()) > 100 * 1024 * 1024:
+        st.error("Video must be under 100MB. Please trim your clip.")
+        st.stop()
+
     if uploaded:
         file_size_mb = len(uploaded.getvalue()) / (1024 * 1024)
         st.success(f"✅ Video uploaded: **{uploaded.name}** ({file_size_mb:.1f} MB)")
@@ -3240,7 +3245,7 @@ def main():
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
 
-            temp_raw_path = tempfile.mktemp(suffix=".avi")
+            temp_raw_path = tempfile.NamedTemporaryFile(delete=False, suffix=".avi").name
             fourcc = cv2.VideoWriter_fourcc(*'XVID')  # Use XVID for intermediate
             writer = cv2.VideoWriter(temp_raw_path, fourcc, fps, (w, h))
             
@@ -3273,7 +3278,7 @@ def main():
             encoding_status = st.empty()
             encoding_status.text("🔄 Converting to web-compatible format...")
             
-            out_path = tempfile.mktemp(suffix=".mp4")
+            out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
             
             try:
                 # Try using ffmpeg via subprocess (most reliable)
@@ -3339,6 +3344,7 @@ def main():
             try:
                 os.unlink(input_path)
                 os.unlink(out_path)
+                os.unlink(temp_raw_path)
             except:
                 pass
     
@@ -3517,9 +3523,8 @@ def main():
             )
     
         except Exception as e:
-            st.error(f"Error during processing: {str(e)}")
-            import traceback
-            st.code(traceback.format_exc())
+            logging.exception("Processing error")
+            st.error("Something went wrong processing your video. Please try a different clip or contact support@swimform.ai.")
 
 if __name__ == "__main__":
     main()
