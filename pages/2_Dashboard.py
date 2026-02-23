@@ -38,7 +38,13 @@ try:
     PYAV_AVAILABLE = True
 except ImportError:
     PYAV_AVAILABLE = False
+IS_DEV = os.environ.get("IS_DEV", "false").lower() == "true"
 
+if not st.session_state.get("paid", False) and not IS_DEV:
+    st.set_page_config(page_title="SwimForm AI", page_icon="🏊")
+    st.error("⛔ Access denied. Please complete payment to access the dashboard.")
+    st.markdown("**[← Return to SwimForm AI](/)** to purchase your analysis.")
+    st.stop()
 # Stripe for payment processing
 try:
     import stripe
