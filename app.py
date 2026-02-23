@@ -360,6 +360,13 @@ def show_landing_page():
 # =============================================
 q = st.query_params
 
+# Admin bypass (secret token in URL)
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
+if ADMIN_TOKEN and q.get("admin") == ADMIN_TOKEN:
+    st.session_state.paid = True
+    st.query_params.clear()
+    st.rerun()
+
 if "session_id" in q and not st.session_state.paid:
     session_id = q.get("session_id")
     try:
