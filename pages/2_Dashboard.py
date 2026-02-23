@@ -888,7 +888,14 @@ def compute_evf_plane_angle(lm_pixel: Dict) -> Tuple[float, bool, str]:
     # === CHECK 3: Elbow drop relative to shoulder ===
     # Elbow shouldn't drop too far below shoulder during catch
     elbow_drop_from_shoulder = elbow[1] - shoulder[1]  # Positive = elbow below shoulder
-    excessive_elbow_drop = elbow_drop_from_shoulder > 80  # Threshold in pixels
+    # Normalize elbow drop against upper arm length (shoulder-to-elbow distance)
+    # This makes the threshold resolution-independent
+    upper_arm_length = np.linalg.norm(elbow - shoulder)
+    if upper_arm_length > 1:
+        normalized_drop = elbow_drop_from_shoulder / upper_arm_length
+        excessive_elbow_drop = normalized_drop > 0.6  # Elbow drops more than 60% of upper arm length
+    else:
+        excessive_elbow_drop = False
     
     # === DETERMINE EVF QUALITY ===
     is_dropped_elbow = not elbow_above_wrist or excessive_elbow_drop
@@ -1087,12 +1094,19 @@ def get_zone_status(val, good, ok):
         return "OK"
     return "Needs Work"
 
-def detect_local_minimum(arr, threshold=10):
-    """Detect stroke based on elbow angle local minimum"""
-    if len(arr) < 3: 
+def detect_local_minimum(arr, threshold=5):
+    """
+    Detect stroke based on elbow angle local minimum.
+    Fires when the center value is the minimum AND is meaningfully lower
+    than the surrounding average (not just the surrounding minimum).
+    """
+    if len(arr) < 5:
         return False
     mid = len(arr) // 2
-    return arr[mid] < min(arr[:mid] + arr[mid+1:]) and (arr[mid] + threshold) <= min(arr[:mid] + arr[mid+1:])
+    surrounding = arr[:mid] + arr[mid+1:]
+    surrounding_avg = sum(surrounding) / len(surrounding)
+    # Mid must be the global minimum AND at least `threshold` below average
+    return arr[mid] == min(arr) and (surrounding_avg - arr[mid]) >= threshold
 
 # ─────────────────────────────────────────────
 # VIDEO CONTEXT DETECTION
@@ -1802,6 +1816,126 @@ def draw_overlay_zones(frame, lm_pixel, horizontal_dev, evf_angle, phase):
         # Draw ideal vertical line from elbow for reference
         cv2.line(frame, elbow, (elbow[0], elbow[1] + 80), (100, 100, 100), 2, cv2.LINE_AA)
 
+def validate_pose(lm_pixel, frame_bgr, frame_h, frame_w):
+    """Validate that detected pose is actually a human, not a pool lane marking"""
+    try:
+        # Get key measurements
+        left_shoulder = np.array(lm_pixel["left_shoulder"])
+        right_shoulder = np.array(lm_pixel["right_shoulder"])
+        left_hip = np.array(lm_pixel["left_hip"])
+        right_hip = np.array(lm_pixel["right_hip"])
+        nose = np.array(lm_pixel["nose"])
+        left_ankle = np.array(lm_pixel["left_ankle"])
+        right_ankle = np.array(lm_pixel["right_ankle"])
+
+        # 1. Shoulder width should be reasonable (not near zero)
+        shoulder_width = np.linalg.norm(left_shoulder - right_shoulder)
+        min_shoulder_width = min(frame_w, frame_h) * 0.02  # At least 2% of frame
+        if shoulder_width < min_shoulder_width:
+            return False, "shoulders too narrow"
+
+        # 2. Hip width should be reasonable
+        hip_width = np.linalg.norm(left_hip - right_hip)
+        if hip_width < min_shoulder_width * 0.5:
+            return False, "hips too narrow"
+
+        # 3. Torso length should be reasonable
+        mid_shoulder = (left_shoulder + right_shoulder) / 2
+        mid_hip = (left_hip + right_hip) / 2
+        torso_length = np.linalg.norm(mid_shoulder - mid_hip)
+
+        # Torso should be at least as long as shoulder width (roughly)
+        if torso_length < shoulder_width * 0.3:
+            return False, "torso too short"
+
+        # 4. Body shouldn't be extremely elongated (like a lane line)
+        body_height = max(
+            np.linalg.norm(nose - mid_hip),
+            torso_length
+        )
+        body_width = max(shoulder_width, hip_width)
+
+        aspect_ratio = body_height / (body_width + 1)
+        if aspect_ratio > 15:
+            return False, "too elongated"
+
+        # 5. Nose should be reasonably close to shoulders
+        nose_to_shoulders = np.linalg.norm(nose - mid_shoulder)
+        if nose_to_shoulders > torso_length * 3:
+            return False, "head too far from body"
+
+        # 6. All key points should be within frame bounds
+        margin = 0.1
+        for name, (x, y) in lm_pixel.items():
+            if x < -frame_w * margin or x > frame_w * (1 + margin):
+                return False, f"{name} out of frame horizontally"
+            if y < -frame_h * margin or y > frame_h * (1 + margin):
+                return False, f"{name} out of frame vertically"
+
+        # === POOL FLOOR MARKING DETECTION ===
+        # Pool floor markings are:
+        # - Located in bottom portion of frame (in above-water footage)
+        # - Dark blue/teal colored (not skin tones)
+
+        # 7. Check if all major body points are in bottom 60% of frame
+        all_points = [nose, left_shoulder, right_shoulder, mid_hip, left_ankle, right_ankle]
+        points_in_bottom = sum(1 for p in all_points if p[1] > frame_h * 0.4)
+
+        if points_in_bottom >= 5:  # Most points in bottom portion
+            # Sample colors around the detected "body"
+            all_x = [p[0] for p in all_points]
+            all_y = [p[1] for p in all_points]
+            min_x = max(0, int(min(all_x)) - 10)
+            max_x = min(frame_w-1, int(max(all_x)) + 10)
+            min_y = max(0, int(min(all_y)) - 10)
+            max_y = min(frame_h-1, int(max(all_y)) + 10)
+
+            if max_x > min_x + 20 and max_y > min_y + 20:
+                roi = frame_bgr[min_y:max_y, min_x:max_x]
+
+                if roi.size > 100:
+                    hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+                    # Check for dark pool marking colors (dark blue/teal tiles)
+                    lower_pool_mark = np.array([85, 30, 20])
+                    upper_pool_mark = np.array([135, 255, 140])
+                    pool_mark_mask = cv2.inRange(hsv_roi, lower_pool_mark, upper_pool_mark)
+                    pool_mark_ratio = np.sum(pool_mark_mask > 0) / (roi.shape[0] * roi.shape[1])
+
+                    # Check for skin tones
+                    lower_skin = np.array([0, 20, 70])
+                    upper_skin = np.array([25, 150, 255])
+                    skin_mask = cv2.inRange(hsv_roi, lower_skin, upper_skin)
+                    skin_ratio = np.sum(skin_mask > 0) / (roi.shape[0] * roi.shape[1])
+
+                    # If mostly dark pool marking color and very little skin = reject
+                    if pool_mark_ratio > 0.25 and skin_ratio < 0.08:
+                        return False, "pool floor marking detected"
+
+                    # Check for cyan/teal water color (pool water around marking)
+                    lower_water = np.array([80, 30, 100])
+                    upper_water = np.array([110, 255, 255])
+                    water_mask = cv2.inRange(hsv_roi, lower_water, upper_water)
+                    water_ratio = np.sum(water_mask > 0) / (roi.shape[0] * roi.shape[1])
+
+                    # If very high water color + pool marking and no skin = floor marking
+                    if (water_ratio + pool_mark_ratio) > 0.7 and skin_ratio < 0.05:
+                        return False, "pool floor marking (water + marking colors)"
+
+        # 8. Check minimum body size relative to frame
+        body_area = body_width * body_height
+        frame_area = frame_w * frame_h
+        body_ratio = body_area / frame_area
+
+        if body_ratio < 0.003:  # Less than 0.3% of frame = too small
+            return False, "detected body too small"
+
+        return True, "valid"
+
+    except Exception as e:
+        return False, f"validation error: {e}"
+
+
 # ─────────────────────────────────────────────
 # ANALYZER CLASS – Enhanced with new metrics
 # ─────────────────────────────────────────────
@@ -1981,126 +2115,7 @@ class SwimAnalyzer:
         # 2. Shoulder width > 0 (not a single line)
         # 3. Body parts in realistic relative positions
         # 4. NOT be a pool floor marking (dark blue in bottom of frame)
-        
-        def validate_pose(lm_pixel, frame_bgr, frame_h, frame_w):
-            """Validate that detected pose is actually a human, not a pool lane marking"""
-            try:
-                # Get key measurements
-                left_shoulder = np.array(lm_pixel["left_shoulder"])
-                right_shoulder = np.array(lm_pixel["right_shoulder"])
-                left_hip = np.array(lm_pixel["left_hip"])
-                right_hip = np.array(lm_pixel["right_hip"])
-                nose = np.array(lm_pixel["nose"])
-                left_ankle = np.array(lm_pixel["left_ankle"])
-                right_ankle = np.array(lm_pixel["right_ankle"])
-                
-                # 1. Shoulder width should be reasonable (not near zero)
-                shoulder_width = np.linalg.norm(left_shoulder - right_shoulder)
-                min_shoulder_width = min(frame_w, frame_h) * 0.02  # At least 2% of frame
-                if shoulder_width < min_shoulder_width:
-                    return False, "shoulders too narrow"
-                
-                # 2. Hip width should be reasonable
-                hip_width = np.linalg.norm(left_hip - right_hip)
-                if hip_width < min_shoulder_width * 0.5:
-                    return False, "hips too narrow"
-                
-                # 3. Torso length should be reasonable
-                mid_shoulder = (left_shoulder + right_shoulder) / 2
-                mid_hip = (left_hip + right_hip) / 2
-                torso_length = np.linalg.norm(mid_shoulder - mid_hip)
-                
-                # Torso should be at least as long as shoulder width (roughly)
-                if torso_length < shoulder_width * 0.3:
-                    return False, "torso too short"
-                
-                # 4. Body shouldn't be extremely elongated (like a lane line)
-                body_height = max(
-                    np.linalg.norm(nose - mid_hip),
-                    torso_length
-                )
-                body_width = max(shoulder_width, hip_width)
-                
-                aspect_ratio = body_height / (body_width + 1)
-                if aspect_ratio > 15:
-                    return False, "too elongated"
-                
-                # 5. Nose should be reasonably close to shoulders
-                nose_to_shoulders = np.linalg.norm(nose - mid_shoulder)
-                if nose_to_shoulders > torso_length * 3:
-                    return False, "head too far from body"
-                
-                # 6. All key points should be within frame bounds
-                margin = 0.1
-                for name, (x, y) in lm_pixel.items():
-                    if x < -frame_w * margin or x > frame_w * (1 + margin):
-                        return False, f"{name} out of frame horizontally"
-                    if y < -frame_h * margin or y > frame_h * (1 + margin):
-                        return False, f"{name} out of frame vertically"
-                
-                # === POOL FLOOR MARKING DETECTION ===
-                # Pool floor markings are:
-                # - Located in bottom portion of frame (in above-water footage)
-                # - Dark blue/teal colored (not skin tones)
-                
-                # 7. Check if all major body points are in bottom 60% of frame
-                all_points = [nose, left_shoulder, right_shoulder, mid_hip, left_ankle, right_ankle]
-                points_in_bottom = sum(1 for p in all_points if p[1] > frame_h * 0.4)
-                
-                if points_in_bottom >= 5:  # Most points in bottom portion
-                    # Sample colors around the detected "body"
-                    all_x = [p[0] for p in all_points]
-                    all_y = [p[1] for p in all_points]
-                    min_x = max(0, int(min(all_x)) - 10)
-                    max_x = min(frame_w-1, int(max(all_x)) + 10)
-                    min_y = max(0, int(min(all_y)) - 10)
-                    max_y = min(frame_h-1, int(max(all_y)) + 10)
-                    
-                    if max_x > min_x + 20 and max_y > min_y + 20:
-                        roi = frame_bgr[min_y:max_y, min_x:max_x]
-                        
-                        if roi.size > 100:
-                            hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-                            
-                            # Check for dark pool marking colors (dark blue/teal tiles)
-                            lower_pool_mark = np.array([85, 30, 20])
-                            upper_pool_mark = np.array([135, 255, 140])
-                            pool_mark_mask = cv2.inRange(hsv_roi, lower_pool_mark, upper_pool_mark)
-                            pool_mark_ratio = np.sum(pool_mark_mask > 0) / (roi.shape[0] * roi.shape[1])
-                            
-                            # Check for skin tones
-                            lower_skin = np.array([0, 20, 70])
-                            upper_skin = np.array([25, 150, 255])
-                            skin_mask = cv2.inRange(hsv_roi, lower_skin, upper_skin)
-                            skin_ratio = np.sum(skin_mask > 0) / (roi.shape[0] * roi.shape[1])
-                            
-                            # If mostly dark pool marking color and very little skin = reject
-                            if pool_mark_ratio > 0.25 and skin_ratio < 0.08:
-                                return False, "pool floor marking detected"
-                            
-                            # Check for cyan/teal water color (pool water around marking)
-                            lower_water = np.array([80, 30, 100])
-                            upper_water = np.array([110, 255, 255])
-                            water_mask = cv2.inRange(hsv_roi, lower_water, upper_water)
-                            water_ratio = np.sum(water_mask > 0) / (roi.shape[0] * roi.shape[1])
-                            
-                            # If very high water color + pool marking and no skin = floor marking
-                            if (water_ratio + pool_mark_ratio) > 0.7 and skin_ratio < 0.05:
-                                return False, "pool floor marking (water + marking colors)"
-                
-                # 8. Check minimum body size relative to frame
-                body_area = body_width * body_height
-                frame_area = frame_w * frame_h
-                body_ratio = body_area / frame_area
-                
-                if body_ratio < 0.003:  # Less than 0.3% of frame = too small
-                    return False, "detected body too small"
-                
-                return True, "valid"
-                
-            except Exception as e:
-                return False, f"validation error: {e}"
-        
+
         is_valid_pose, validation_reason = validate_pose(lm_pixel, frame, h, w)
         if not is_valid_pose:
             # Not a valid human pose - skip this frame
@@ -2188,10 +2203,18 @@ class SwimAnalyzer:
             calculate_angle(lm_pixel["right_shoulder"], lm_pixel["right_elbow"], lm_pixel["right_wrist"])
         )
 
-        roll = abs(math.degrees(math.atan2(
+        roll_raw = abs(math.degrees(math.atan2(
             lm_pixel["left_shoulder"][1] - lm_pixel["right_shoulder"][1],
             lm_pixel["left_shoulder"][0] - lm_pixel["right_shoulder"][0]
         )))
+
+        # Body roll is only meaningful from front or top view cameras.
+        # Side-view cameras see both shoulders stacked — roll appears as ~90° always.
+        # For side-view, default to 45° (ideal neutral) so no roll penalty is applied.
+        is_front_or_top_view = self.video_context.camera_view in (
+            CameraView.FRONT, CameraView.TOP
+        )
+        roll = roll_raw if is_front_or_top_view else 45.0
 
         knee_l = calculate_angle(lm_pixel["left_hip"], lm_pixel["left_knee"], lm_pixel["left_ankle"])
         knee_r = calculate_angle(lm_pixel["right_hip"], lm_pixel["right_knee"], lm_pixel["right_ankle"])
@@ -2350,16 +2373,27 @@ class SwimAnalyzer:
             self.glide_frames += 1
 
         # Weighted overall score (updated to include glide)
-        # Weight distribution: Alignment 20%, EVF 20%, Roll 15%, Kick 15%, Torso 10%, Glide 10%, Breathing 10%
-        score = (
-            alignment_score * 0.20 +
-            evf_score * 0.20 +
-            roll_score * 0.15 +
-            kick_score * 0.15 +
-            torso_score * 0.10 +
-            (glide_score if is_gliding else 70) * 0.10 +  # Glide score or neutral
-            100 * 0.10  # Base breathing score
-        ) - breath_penalty
+        if is_gliding:
+            # When gliding, include glide quality in the score
+            score = (
+                alignment_score * 0.18 +
+                evf_score * 0.18 +
+                roll_score * 0.15 +
+                kick_score * 0.15 +
+                torso_score * 0.10 +
+                glide_score * 0.14 +
+                100 * 0.10
+            ) - breath_penalty
+        else:
+            # When not gliding, redistribute glide weight to alignment and EVF
+            score = (
+                alignment_score * 0.25 +
+                evf_score * 0.25 +
+                roll_score * 0.15 +
+                kick_score * 0.15 +
+                torso_score * 0.10 +
+                100 * 0.10
+            ) - breath_penalty
 
         score = max(0, min(100, score))
 
@@ -2529,14 +2563,20 @@ class SwimAnalyzer:
                 diagnostics.append("💡 EVF is OK - work on reaching forward then dropping fingertips before pulling.")
 
         # 5. Breathing during pull
-        if self.breaths_during_pull > 0:
+        # Only flag if more than 1 breath during pull, or 1 breath in a video longer than 20s
+        if self.breaths_during_pull > 1 or (self.breaths_during_pull == 1 and d > 20):
             diagnostics.append(f"⚠️ {self.breaths_during_pull} breath(s) during pull phase - breathe during recovery to maintain EVF.")
 
-        # 6. Body roll
-        if avg_roll < DEFAULT_ROLL_GOOD[0]:
-            diagnostics.append("💡 Body roll is too flat - aim for 35-55° rotation to engage lats.")
-        elif avg_roll > DEFAULT_ROLL_GOOD[1]:
-            diagnostics.append("⚠️ Excessive body roll - this may cause energy leaks and over-rotation.")
+        # 6. Body roll — only report if camera view supports it
+        roll_context_valid = (
+            self.video_context and
+            self.video_context.camera_view in (CameraView.FRONT, CameraView.TOP)
+        )
+        if roll_context_valid:
+            if avg_roll < DEFAULT_ROLL_GOOD[0]:
+                diagnostics.append("💡 Body roll is too flat - aim for 35-55° rotation to engage lats.")
+            elif avg_roll > DEFAULT_ROLL_GOOD[1]:
+                diagnostics.append("⚠️ Excessive body roll - this may cause energy leaks and over-rotation.")
 
         # 7. Breathing balance
         breath_balance = abs(self.breath_l - self.breath_r)
@@ -3018,6 +3058,9 @@ def main():
     if not MEDIAPIPE_TASKS_AVAILABLE:
         st.error("MediaPipe Tasks not installed. Run: pip install mediapipe>=0.10.14")
         return
+
+    if STRIPE_AVAILABLE and not os.environ.get("STRIPE_SECRET_KEY"):
+        st.sidebar.warning("⚠️ STRIPE_SECRET_KEY not set — payment verification disabled")
 
     with st.sidebar:
         st.header("⚙️ Athlete & Settings")
