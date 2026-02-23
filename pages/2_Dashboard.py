@@ -65,11 +65,6 @@ def verify_stripe_payment(session_id: str) -> bool:
     except Exception as e:
         st.error(f"Stripe verification error: {e}")
         return False
-with st.sidebar:
-    with st.expander(""):
-        admin_pw = st.text_input("Admin access", type="password", label_visibility="collapsed")
-        if admin_pw == os.environ.get("ADMIN_PASSWORD", ""):
-            st.session_state.paid = True
 
 # ─────────────────────────────────────────────
 # MEDIAPIPE TASKS API
