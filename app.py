@@ -351,7 +351,7 @@ def show_landing_page():
     # --- Footer ---
     st.markdown("""
     <div style="text-align: center; margin-top: 100px; padding: 40px 0; border-top: 1px solid rgba(6, 182, 212, 0.1); color: #64748b; font-size: 0.8rem; position: relative; z-index: 1;">
-        © 2026 SwimForm AI · Professional Biomechanics for Every Lane · <a href="mailto:support@swimform.ai" style="color: #22d3ee; text-decoration: none;">Support</a>
+        © 2026 SwimForm AI · Professional Biomechanics for Every Lane · <a href="mailto:info@swimform-ai.com" style="color: #22d3ee; text-decoration: none;">Support</a>
     </div>
     """, unsafe_allow_html=True)
 
