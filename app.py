@@ -304,6 +304,22 @@ def show_landing_page():
         """
         components.html(html_code, height=450)
 
+    # --- Loom Demo Video ---
+    st.markdown("""
+    <div style="text-align: center; margin: 40px 0 20px; position: relative; z-index: 1;">
+        <p style="color: #22d3ee; font-size: 0.85rem; font-weight: 700; letter-spacing: 1px; margin-bottom: 8px;">🎬 SEE IT IN ACTION</p>
+        <h2 style="color: white; font-size: 1.8rem; margin: 0 0 20px;">Watch a Real Analysis — Start to Report</h2>
+    </div>
+    <div style="position: relative; padding-bottom: 62.5%; height: 0; border-radius: 16px; overflow: hidden; border: 1px solid rgba(34,211,238,0.2); box-shadow: 0 20px 40px rgba(0,0,0,0.4); max-width: 780px; margin: 0 auto 50px; z-index: 1;">
+        <iframe 
+            src="https://www.loom.com/embed/db63de9d2f6647e891aa28ab598c9de1?hide_owner=true&hide_share=true&hide_title=true&hideEmbedTopBar=true" 
+            frameborder="0" 
+            webkitallowfullscreen mozallowfullscreen allowfullscreen 
+            style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;">
+        </iframe>
+    </div>
+    """, unsafe_allow_html=True)
+
     # --- Pricing & CTA ---
     col1, col2, col3 = st.columns([1, 1.8, 1])
     with col2:
