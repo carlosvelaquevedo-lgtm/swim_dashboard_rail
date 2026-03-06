@@ -378,7 +378,9 @@ q = st.query_params
 
 # Admin bypass (secret token in URL)
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
-if ADMIN_TOKEN and q.get("admin") == ADMIN_TOKEN:
+ADMIN_TOKEN_2 = os.environ.get("ADMIN_TOKEN_2", "")
+valid_tokens = [t for t in [ADMIN_TOKEN, ADMIN_TOKEN_2] if t]
+if valid_tokens and q.get("admin") in valid_tokens:
     st.session_state.paid = True
     st.query_params.clear()
     st.query_params["verified"] = "admin"
