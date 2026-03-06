@@ -17,6 +17,9 @@ from collections import deque
 import io
 import zipfile
 import urllib.request
+import subprocess
+import shutil
+import gc
 
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image as RLImage
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -56,7 +59,12 @@ except ImportError:
     STRIPE_AVAILABLE = False
 
 def verify_stripe_payment(session_id: str) -> bool:
-    """Verify a Stripe Checkout session server-side."""
+    """Verify a Stripe Checkout session server-side, or accept admin bypass."""
+    # Admin bypass — set by app.py when using ?admin=TOKEN
+    if session_id == "admin":
+        admin_token = os.environ.get("ADMIN_TOKEN", "")
+        return bool(admin_token)  # True if ADMIN_TOKEN is configured
+    
     if not STRIPE_AVAILABLE:
         return False
     try:
@@ -72,7 +80,8 @@ def verify_stripe_payment(session_id: str) -> bool:
 
 # ── Verify Stripe payment from URL query params ──
 if not st.session_state.get("paid", False):
-    session_id = st.query_params.get("session_id", "")
+    # Check both ?session_id= (Stripe redirect) and ?verified= (mobile reconnect)
+    session_id = st.query_params.get("session_id", "") or st.query_params.get("verified", "")
     if session_id:
         if verify_stripe_payment(session_id):
             st.session_state["paid"] = True
@@ -2944,6 +2953,165 @@ def create_results_bundle(video_path, csv_buf, pdf_buf, timestamp):
     return zip_buf
 
 # ─────────────────────────────────────────────
+# VIDEO PRE-CONVERSION (HEVC/MOV → H.264)
+# ─────────────────────────────────────────────
+
+def check_ffmpeg_available() -> bool:
+    """Check if ffmpeg binary is available on the system."""
+    try:
+        result = subprocess.run(
+            ['ffmpeg', '-version'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+FFMPEG_AVAILABLE = check_ffmpeg_available()
+
+def preconvert_to_h264(input_path: str) -> Tuple[str, bool]:
+    """
+    Convert input video to H.264 MP4 with memory-optimized settings.
+    
+    This does THREE things to prevent OOM on low-memory servers:
+    1. Transcodes HEVC/MOV → H.264 (so OpenCV can read it)
+    2. Downscales to max 720p height (reduces per-frame memory ~75%)
+    3. Caps FPS at 30 (halves frame count for 60fps phone recordings)
+    
+    Returns:
+        - output_path: path to converted file (or original if conversion skipped/failed)
+        - was_converted: True if conversion was performed
+    """
+    if not FFMPEG_AVAILABLE:
+        logging.warning("ffmpeg not available — skipping pre-conversion")
+        return input_path, False
+    
+    # Probe input: codec, resolution, fps
+    needs_conversion = False
+    needs_downscale = False
+    needs_fps_cap = False
+    input_width = 0
+    input_height = 0
+    input_fps = 30.0
+    
+    try:
+        probe_result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+             '-show_entries', 'stream=codec_name,width,height,r_frame_rate',
+             '-of', 'csv=p=0',
+             input_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=15
+        )
+        parts = probe_result.stdout.decode().strip().split(',')
+        
+        if len(parts) >= 4:
+            codec = parts[0].lower()
+            input_width = int(parts[1]) if parts[1].isdigit() else 0
+            input_height = int(parts[2]) if parts[2].isdigit() else 0
+            # Parse fps fraction like "60/1"
+            try:
+                fps_parts = parts[3].split('/')
+                input_fps = float(fps_parts[0]) / float(fps_parts[1]) if len(fps_parts) == 2 else float(fps_parts[0])
+            except:
+                input_fps = 30.0
+            
+            needs_conversion = codec not in ('h264', 'libx264')
+            needs_downscale = max(input_width, input_height) > 720
+            needs_fps_cap = input_fps > 32
+            
+            logging.info(f"Video probe: codec={codec}, {input_width}x{input_height}, {input_fps:.1f}fps | "
+                        f"convert={needs_conversion}, downscale={needs_downscale}, fps_cap={needs_fps_cap}")
+        else:
+            # Couldn't parse — force conversion to be safe
+            needs_conversion = True
+            
+    except Exception as e:
+        logging.warning(f"Could not probe video: {e} — forcing conversion")
+        needs_conversion = True
+    
+    # Skip if nothing needs to change
+    if not needs_conversion and not needs_downscale and not needs_fps_cap:
+        logging.info("Video already optimized — skipping pre-conversion")
+        return input_path, False
+    
+    # Build ffmpeg command
+    converted_path = tempfile.NamedTemporaryFile(delete=False, suffix='_h264.mp4').name
+    
+    ffmpeg_cmd = ['ffmpeg', '-i', input_path]
+    
+    # Video filters: downscale + fps cap
+    vf_filters = []
+    
+    if needs_downscale:
+        # Scale so the LONGEST side is 720px, preserving aspect ratio
+        # -2 ensures dimensions are divisible by 2 (required for H.264)
+        if input_height > input_width:
+            # Portrait: cap height at 720
+            vf_filters.append("scale=-2:720")
+        else:
+            # Landscape: cap width at 720
+            vf_filters.append("scale=720:-2")
+    
+    if needs_fps_cap:
+        vf_filters.append("fps=30")
+    
+    if vf_filters:
+        ffmpeg_cmd.extend(['-vf', ','.join(vf_filters)])
+    
+    ffmpeg_cmd.extend([
+        '-c:v', 'libx264',
+        '-preset', 'fast',
+        '-crf', '23',
+        '-pix_fmt', 'yuv420p',
+        '-an',                      # drop audio
+        '-movflags', '+faststart',  # web-friendly MP4
+        '-y',
+        converted_path
+    ])
+    
+    try:
+        result = subprocess.run(
+            ffmpeg_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=180
+        )
+        
+        if result.returncode == 0 and os.path.exists(converted_path) and os.path.getsize(converted_path) > 0:
+            # Log the savings
+            orig_size = os.path.getsize(input_path) / (1024 * 1024)
+            new_size = os.path.getsize(converted_path) / (1024 * 1024)
+            logging.info(f"Pre-conversion successful: {orig_size:.1f}MB → {new_size:.1f}MB")
+            return converted_path, True
+        else:
+            stderr_msg = result.stderr.decode()[-500:] if result.stderr else "no stderr"
+            logging.warning(f"Pre-conversion failed (rc={result.returncode}): {stderr_msg}")
+            try:
+                os.unlink(converted_path)
+            except:
+                pass
+            return input_path, False
+            
+    except subprocess.TimeoutExpired:
+        logging.warning("Pre-conversion timed out after 180s")
+        try:
+            os.unlink(converted_path)
+        except:
+            pass
+        return input_path, False
+    except Exception as e:
+        logging.warning(f"Pre-conversion error: {e}")
+        try:
+            os.unlink(converted_path)
+        except:
+            pass
+        return input_path, False
+
+# ─────────────────────────────────────────────
 # MAIN APP - Enhanced UI
 # ─────────────────────────────────────────────
 
@@ -3033,7 +3201,9 @@ def main():
                 st.session_state.paid = True
                 st.session_state.stripe_session_id = session_id
                 st.success("Payment verified! Loading dashboard...")
-                st.query_params.clear()
+                # Keep verified session_id in URL so mobile reconnects can recover
+                st.query_params["verified"] = session_id
+                st.query_params.pop("session_id", None)
             else:
                 st.error("Payment could not be verified. Please try again or contact support.")
                 st.query_params.clear()
@@ -3041,7 +3211,25 @@ def main():
         st.warning("Payment cancelled. You can try again when you're ready.")
         st.query_params.clear()
     
-    # Step 2: Block access if not paid
+    # Step 2: Block access if not paid (also check for verified param from reconnect)
+    if not st.session_state.get("paid", False):
+        # Try recovering from verified query param (handles mobile browser reconnects)
+        verified_id = query_params.get("verified")
+        if verified_id:
+            if verify_stripe_payment(verified_id):
+                st.session_state.paid = True
+                # Continue to dashboard — don't stop
+            else:
+                st.error("Access Denied - Payment session expired. Please purchase again.")
+                st.query_params.clear()
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Back to Home", use_container_width=True):
+                        st.switch_page("app.py")
+                with col2:
+                    st.link_button("Go to Payment", STRIPE_PAYMENT_LINK, use_container_width=True, type="primary")
+                st.stop()
+    
     if not st.session_state.get("paid", False):
         st.error("Access Denied - Please complete payment")
         st.markdown("Please complete payment to access the swim analysis dashboard.")
@@ -3161,7 +3349,13 @@ def main():
     # ═══════════════════════════════════════════════════════════════
 
     st.subheader("📹 Step 1: Upload Your Video")
-    uploaded = st.file_uploader("Upload swimming video", type=["mp4", "mov", "avi", "MOV", "MP4", "AVI"])
+    uploaded = st.file_uploader("Upload swimming video", type=["mp4", "mov", "avi", "MOV", "MP4", "AVI", "m4v", "M4V"])
+    
+    if not FFMPEG_AVAILABLE:
+        st.caption("⚠️ FFmpeg not detected on server — iPhone .MOV files may not process correctly. "
+                   "If your video fails, try converting to MP4 (H.264) before uploading.")
+    else:
+        st.caption("✅ All common video formats supported including iPhone recordings (.MOV/HEVC).")
 
     if uploaded and len(uploaded.getvalue()) > 100 * 1024 * 1024:
         st.error("Video must be under 100MB. Please trim your clip.")
@@ -3246,11 +3440,73 @@ def main():
                 tmp_in.write(uploaded.getvalue())
                 input_path = tmp_in.name
     
+            # ── PRE-CONVERT HEVC/MOV TO H.264 ──
+            # iPhone screen recordings and many phone cameras use HEVC (H.265)
+            # which OpenCV often can't decode. Convert to H.264 first.
+            converted_path = None
+            conversion_status = st.empty()
+            
+            input_path_original = input_path  # keep reference for cleanup
+            input_path, was_converted = preconvert_to_h264(input_path)
+            
+            if was_converted:
+                converted_path = input_path  # track for cleanup
+                conversion_status.success("✅ Video optimized (converted to H.264, downscaled for performance)")
+            elif not FFMPEG_AVAILABLE:
+                conversion_status.warning("⚠️ FFmpeg not available — using original file directly. "
+                                          "If analysis fails, the video format may not be supported.")
+            
+            # ── VALIDATE VIDEO CAN BE OPENED ──
             cap = cv2.VideoCapture(input_path)
+            
+            # Free the in-memory upload buffer now that we've written to disk
+            # This can reclaim 10-100MB depending on video size
+            gc.collect()
+            
+            if not cap.isOpened():
+                cap.release()
+                st.error("❌ **Could not open this video file.** "
+                         "This usually means the video codec is not supported. "
+                         "Please try one of these:\n"
+                         "- Convert to MP4 (H.264) using a free tool like HandBrake or VLC\n"
+                         "- Record using your phone's camera app instead of screen recording\n"
+                         "- Contact support@swimform-ai.com for help")
+                # Cleanup
+                try:
+                    os.unlink(input_path_original)
+                    if converted_path:
+                        os.unlink(converted_path)
+                except:
+                    pass
+                st.stop()
+            
             fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            # Additional validation: check we can actually read frames
+            if total == 0 or w == 0 or h == 0:
+                ret_test, frame_test = cap.read()
+                if not ret_test:
+                    cap.release()
+                    st.error("❌ **Video file appears to be empty or unreadable.** "
+                             "Please try a different video or convert to MP4 (H.264).")
+                    try:
+                        os.unlink(input_path_original)
+                        if converted_path:
+                            os.unlink(converted_path)
+                    except:
+                        pass
+                    st.stop()
+                # If we could read a frame but metadata was wrong, re-get info
+                h_frame, w_frame = frame_test.shape[:2]
+                if w == 0:
+                    w = w_frame
+                if h == 0:
+                    h = h_frame
+                # Reset capture to beginning
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
     
 
             temp_raw_path = tempfile.NamedTemporaryFile(delete=False, suffix=".avi").name
@@ -3281,6 +3537,9 @@ def main():
             writer.release()
             processing_status.text("✅ Analysis complete!")
             
+            # Free frame processing memory before re-encoding
+            gc.collect()
+            
             # Re-encode to H.264 for web compatibility
             st.markdown("### 🎥 Finalizing Video")
             encoding_status = st.empty()
@@ -3288,46 +3547,38 @@ def main():
             
             out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
             
-            try:
-                # Try using ffmpeg via subprocess (most reliable)
-                import subprocess
-                
-                ffmpeg_cmd = [
-                    'ffmpeg', '-i', temp_raw_path,
-                    '-c:v', 'libx264',  # H.264 codec
-                    '-preset', 'fast',
-                    '-crf', '23',  # Quality (lower = better, 18-28 is good range)
-                    '-pix_fmt', 'yuv420p',  # Ensure compatibility
-                    '-y',  # Overwrite output
-                    out_path
-                ]
-                
-                result = subprocess.run(
-                    ffmpeg_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=300  # 5 minute timeout
-                )
-                
-                if result.returncode != 0:
-                    raise Exception(f"FFmpeg failed: {result.stderr.decode()}")
-                
-                encoding_status.text("✅ Video conversion complete!")
-                
-            except Exception as e:
-                encoding_status.warning(f"⚠️ FFmpeg conversion failed: {e}. Using original format.")
-                # Fallback: just copy the original
-                import shutil
+            if FFMPEG_AVAILABLE:
+                try:
+                    ffmpeg_cmd = [
+                        'ffmpeg', '-i', temp_raw_path,
+                        '-c:v', 'libx264',
+                        '-preset', 'fast',
+                        '-crf', '23',
+                        '-pix_fmt', 'yuv420p',
+                        '-movflags', '+faststart',
+                        '-y',
+                        out_path
+                    ]
+                    
+                    result = subprocess.run(
+                        ffmpeg_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=300
+                    )
+                    
+                    if result.returncode != 0:
+                        raise Exception(f"FFmpeg exit code {result.returncode}")
+                    
+                    encoding_status.text("✅ Video conversion complete!")
+                    
+                except Exception as e:
+                    encoding_status.warning(f"⚠️ FFmpeg conversion issue: {e}. Using raw format.")
+                    shutil.copy(temp_raw_path, out_path)
+            else:
+                encoding_status.warning("⚠️ FFmpeg not available — video may not play in all browsers.")
                 shutil.copy(temp_raw_path, out_path)
 
-            
-            
-            
-            
-            processing_status.text("✅ Analysis complete!")
-
-            encoding_status = st.empty()
-            encoding_status.text("✅ Video saved as native MP4 (ready for playback)")
     
             # READ VIDEO BYTES BEFORE DELETING FILES
             with open(out_path, 'rb') as f:
@@ -3350,9 +3601,11 @@ def main():
     
             # CLEANUP TEMP FILES (after everything is processed)
             try:
-                os.unlink(input_path)
+                os.unlink(input_path_original)
                 os.unlink(out_path)
                 os.unlink(temp_raw_path)
+                if converted_path and converted_path != input_path_original:
+                    os.unlink(converted_path)
             except:
                 pass
     
