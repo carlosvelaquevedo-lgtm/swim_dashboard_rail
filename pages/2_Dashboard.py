@@ -59,12 +59,7 @@ except ImportError:
     STRIPE_AVAILABLE = False
 
 def verify_stripe_payment(session_id: str) -> bool:
-    """Verify a Stripe Checkout session server-side, or accept admin bypass."""
-    # Admin bypass — set by app.py when using ?admin=TOKEN
-    if session_id == "admin":
-        admin_token = os.environ.get("ADMIN_TOKEN", "")
-        return bool(admin_token)  # True if ADMIN_TOKEN is configured
-    
+    """Verify a Stripe Checkout session server-side."""
     if not STRIPE_AVAILABLE:
         return False
     try:
@@ -80,10 +75,15 @@ def verify_stripe_payment(session_id: str) -> bool:
 
 # ── Verify Stripe payment from URL query params ──
 if not st.session_state.get("paid", False):
-    # Check both ?session_id= (Stripe redirect) and ?verified= (mobile reconnect)
-    session_id = st.query_params.get("session_id", "") or st.query_params.get("verified", "")
+    session_id = st.query_params.get("session_id", "")
+    admin_key = st.query_params.get("admin_key", "")
+    
     if session_id:
         if verify_stripe_payment(session_id):
+            st.session_state["paid"] = True
+    elif admin_key:
+        expected = os.environ.get("ADMIN_TOKEN", "")
+        if expected and admin_key == expected:
             st.session_state["paid"] = True
 
 if not st.session_state.get("paid", False) and not IS_DEV:
