@@ -70,7 +70,7 @@ def verify_stripe_payment(session_id: str) -> bool:
         return session.payment_status == "paid"
     except Exception as e:
         logging.error(f"Stripe verification error: {e}")
-        st.error("Payment verification failed. Please try again or contact support@swimform.ai.")
+        st.error("Payment verification failed. Please try again or contact info@swimform-ai.com")
         return False
 
 # ── Verify Stripe payment from URL query params ──
@@ -3621,7 +3621,7 @@ def main():
                          "Please try one of these:\n"
                          "- Convert to MP4 (H.264) using a free tool like HandBrake or VLC\n"
                          "- Record using your phone's camera app instead of screen recording\n"
-                         "- Contact support@swimform-ai.com for help")
+                         "- Contact info@swimform-ai.com for help")
                 # Cleanup
                 try:
                     os.unlink(input_path_original)
@@ -3805,7 +3805,7 @@ def main():
 
           except Exception as e:
             logging.exception("Processing error")
-            st.error("Something went wrong processing your video. Please try a different clip or contact support@swimform.ai.")
+            st.error("Something went wrong processing your video. Please try a different clip or contact info@swimform-ai.com")
 
         # === DISPLAY RESULTS (runs from cache or fresh) ===
         if "analysis_results" in st.session_state and st.session_state.get("analysis_cache_key") == cache_key:
