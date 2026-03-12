@@ -2567,31 +2567,67 @@ class SwimAnalyzer:
         
         # 1. DROPPED ELBOW - Most critical EVF issue
         if dropped_elbow_pct > 50:
-            diagnostics.append(f"🚨 DROPPED ELBOW detected in {dropped_elbow_pct:.0f}% of catch frames - this is your #1 priority! Keep elbow HIGH and above wrist during the catch.")
+            diagnostics.append(
+                f"🚨 DROPPED ELBOW detected in {dropped_elbow_pct:.0f}% of catch frames - "
+                "this is your #1 priority! Keep elbow HIGH and above wrist during the catch.\n"
+                "📋 Drills: Fingertip Drag drill, Catch-Up drill with fist closed, "
+                "Single-Arm freestyle focusing on high elbow catch."
+            )
         elif dropped_elbow_pct > 20:
-            diagnostics.append(f"⚠️ Dropped elbow detected in {dropped_elbow_pct:.0f}% of catch frames - focus on 'elbow up' cue during entry and catch.")
-        
+            diagnostics.append(
+                f"⚠️ Dropped elbow detected in {dropped_elbow_pct:.0f}% of catch frames - "
+                "focus on 'elbow up' cue during entry and catch.\n"
+                "📋 Drills: Sculling drill (front scull), Tarzan drill, "
+                "6-kick switch with emphasis on catch position."
+            )
+
         # 2. VERTICAL DROP / SINKING - Critical for drag
         if avg_v_drop > 15:
-            diagnostics.append("🚨 SINKING HIPS/LEGS - your lower body is dragging. Focus on: head position (look down), core engagement, and kick from hips.")
+            diagnostics.append(
+                "🚨 SINKING HIPS/LEGS - your lower body is dragging. "
+                "Focus on: head position (look down), core engagement, and kick from hips.\n"
+                "📋 Drills: Kick on side (6-3-6), Streamline kick with snorkel, "
+                "Superman/torpedo glide drill, Front balance drill."
+            )
         elif avg_v_drop > 8:
-            diagnostics.append("⚠️ Slight hip drop detected - engage core and press chest down slightly to lift hips.")
-        
+            diagnostics.append(
+                "⚠️ Slight hip drop detected - engage core and press chest down slightly to lift hips.\n"
+                "📋 Drills: Kick on side drill, Vertical kicking, "
+                "Press-and-glide drill (press chest, lift hips)."
+            )
+
         # 3. Horizontal alignment (lateral)
         if avg_h_dev > DEFAULT_HORIZONTAL_DEV_OK[1]:
-            diagnostics.append("⚠️ Body alignment deviation - you may be 'snake swimming'. Focus on rotating around your spine axis.")
-        
+            diagnostics.append(
+                "⚠️ Body alignment deviation - you may be 'snake swimming'. "
+                "Focus on rotating around your spine axis.\n"
+                "📋 Drills: Head-lead body rotation drill, "
+                "Catch-up drill with pause, Side-kick drill (maintain centerline)."
+            )
+
         # 4. EVF angle (if not already flagged for dropped elbow)
         if dropped_elbow_pct <= 20:
             if avg_evf > DEFAULT_EVF_ANGLE_OK[1]:
-                diagnostics.append("⚠️ EVF needs work - focus on 'fingertips down, elbow up' during the catch.")
+                diagnostics.append(
+                    "⚠️ EVF needs work - focus on 'fingertips down, elbow up' during the catch.\n"
+                    "📋 Drills: Front scull, Fist drill, "
+                    "Single-arm with kickboard (focus on early catch)."
+                )
             elif avg_evf > DEFAULT_EVF_ANGLE_GOOD[1]:
-                diagnostics.append("💡 EVF is OK - work on reaching forward then dropping fingertips before pulling.")
+                diagnostics.append(
+                    "💡 EVF is OK - work on reaching forward then dropping fingertips before pulling.\n"
+                    "📋 Drills: Catch-up drill, Paddle work with focus on catch angle."
+                )
 
         # 5. Breathing during pull
         # Only flag if more than 1 breath during pull, or 1 breath in a video longer than 20s
         if self.breaths_during_pull > 1 or (self.breaths_during_pull == 1 and d > 20):
-            diagnostics.append(f"⚠️ {self.breaths_during_pull} breath(s) during pull phase - breathe during recovery to maintain EVF.")
+            diagnostics.append(
+                f"⚠️ {self.breaths_during_pull} breath(s) during pull phase - "
+                "breathe during recovery to maintain EVF.\n"
+                "📋 Drills: 3-3-3 breathing drill (3 strokes breathe, 3 don't), "
+                "Unco drill (one arm only, focus on breath timing)."
+            )
 
         # 6. Body roll — only report if camera view supports it
         roll_context_valid = (
@@ -2600,30 +2636,62 @@ class SwimAnalyzer:
         )
         if roll_context_valid:
             if avg_roll < DEFAULT_ROLL_GOOD[0]:
-                diagnostics.append("💡 Body roll is too flat - aim for 35-55° rotation to engage lats.")
+                diagnostics.append(
+                    "💡 Body roll is too flat - aim for 35-55° rotation to engage lats.\n"
+                    "📋 Drills: Side-kick drill, 6-3-6 drill (six kicks on each side), "
+                    "Log roll drill."
+                )
             elif avg_roll > DEFAULT_ROLL_GOOD[1]:
-                diagnostics.append("⚠️ Excessive body roll - this may cause energy leaks and over-rotation.")
+                diagnostics.append(
+                    "⚠️ Excessive body roll - this may cause energy leaks and over-rotation.\n"
+                    "📋 Drills: Catch-up drill with pause (stabilize rotation), "
+                    "Kickboard single-arm drill, Core stabilization on deck."
+                )
 
         # 7. Breathing balance
         breath_balance = abs(self.breath_l - self.breath_r)
         if breath_balance > 5:
             side = "left" if self.breath_l > self.breath_r else "right"
-            diagnostics.append(f"💡 Breathing is asymmetric (favoring {side}) - practice bilateral breathing.")
+            diagnostics.append(
+                f"💡 Breathing is asymmetric (favoring {side}) - practice bilateral breathing.\n"
+                "📋 Drills: 3-5-3 breathing pattern, Bilateral breathing sets, "
+                "Snorkel freestyle (eliminates breathing preference)."
+            )
 
         # Calculate glide metrics
         glide_metrics = [m for m in high_conf_metrics if m.is_gliding]
         glide_ratio = (len(glide_metrics) / len(high_conf_metrics) * 100) if high_conf_metrics else 0
         avg_glide_score = statistics.mean([m.glide_score for m in glide_metrics]) if glide_metrics else 0
-        
+
         # 8. GLIDE assessment
         if glide_ratio < 10:
-            diagnostics.append("🚨 MINIMAL GLIDE detected - you're rushing your stroke! Extend your lead arm and glide briefly after each entry to maximize distance per stroke.")
+            diagnostics.append(
+                "🚨 MINIMAL GLIDE detected - you're rushing your stroke! "
+                "Extend your lead arm and glide briefly after each entry to maximize distance per stroke.\n"
+                "📋 Drills: Catch-up drill, 3-second glide drill, "
+                "DPS (distance per stroke) counting sets."
+            )
         elif glide_ratio < 20:
-            diagnostics.append("⚠️ Low glide ratio ({:.0f}%) - try extending your lead arm longer before starting the catch. This improves efficiency.".format(glide_ratio))
+            diagnostics.append(
+                f"⚠️ Low glide ratio ({glide_ratio:.0f}%) - try extending your lead arm longer "
+                "before starting the catch. This improves efficiency.\n"
+                "📋 Drills: Catch-up drill, Fingertip drag with glide pause, "
+                "Swim golf (count strokes + time)."
+            )
         elif glide_ratio > 40:
-            diagnostics.append("💡 High glide ratio ({:.0f}%) - good for distance swimming! For sprints, you may want to reduce glide time.".format(glide_ratio))
+            diagnostics.append(
+                f"💡 High glide ratio ({glide_ratio:.0f}%) - good for distance swimming! "
+                "For sprints, you may want to reduce glide time.\n"
+                "📋 Drills: Tempo trainer sets to increase turnover, "
+                "Sprint 25s with stroke rate targets."
+            )
         elif avg_glide_score < 60 and glide_ratio >= 15:
-            diagnostics.append("💡 Glide detected but form could improve - focus on full arm extension and streamlined body during glide phase.")
+            diagnostics.append(
+                "💡 Glide detected but form could improve - focus on full arm extension "
+                "and streamlined body during glide phase.\n"
+                "📋 Drills: Streamline push-offs (tight core), "
+                "Superman glide drill, Kick with arms extended."
+            )
 
         if not diagnostics:
             diagnostics.append("✅ Great technique! Keep up the good work.")
@@ -2868,14 +2936,40 @@ def generate_pdf_report(summary: SessionSummary, filename: str, plot_buffer: io.
     # Diagnostics
     story.append(Paragraph("Coaching Insights", styles['Heading2']))
     for diag in summary.diagnostics:
-        if diag.startswith("✅"):
+        # Strip drill lines for the coaching insights section (drills get their own section)
+        insight_text = diag.split("\n")[0].strip()
+        if insight_text.startswith("✅"):
             style = styles['DiagnosticGood']
-        elif diag.startswith("⚠️"):
+        elif insight_text.startswith("⚠️"):
             style = styles['DiagnosticError']
         else:
             style = styles['DiagnosticWarn']
-        story.append(Paragraph(diag, style))
+        story.append(Paragraph(insight_text, style))
         story.append(Spacer(1, 0.1*inch))
+
+    # Recommended Drills section
+    story.append(Spacer(1, 0.25*inch))
+    story.append(Paragraph("Recommended Drills", styles['Heading2']))
+    drills_found = []
+    for diag in summary.diagnostics:
+        if "📋 Drills:" in diag:
+            drill_text = diag.split("📋 Drills:")[1].strip()
+            issue_text = diag.split("\n")[0].strip()
+            for prefix in ["🚨 ", "⚠️ ", "💡 ", "✅ "]:
+                if issue_text.startswith(prefix):
+                    issue_text = issue_text[len(prefix):]
+                    break
+            if " - " in issue_text:
+                issue_text = issue_text.split(" - ")[0]
+            drills_found.append((issue_text, drill_text))
+    if drills_found:
+        for issue, drills in drills_found:
+            story.append(Paragraph(f"<b>For: {issue}</b>", styles['Normal']))
+            story.append(Paragraph(f"→ {drills}", styles['Normal']))
+            story.append(Spacer(1, 0.1*inch))
+    else:
+        story.append(Paragraph("✅ No specific drills needed — technique looks solid! "
+                               "Continue with your current training plan.", styles['Normal']))
 
     # Best & Worst Frames
     if summary.best_frame_bytes or summary.worst_frame_bytes:
@@ -3265,19 +3359,18 @@ def main():
         
         # Height input with feet/inches conversion
         st.subheader("Height")
-        height_unit = st.radio("Unit", ["cm", "ft/in"], horizontal=True, label_visibility="collapsed")
-        
-        if height_unit == "cm":
-            height = st.slider("Height (cm)", 150, 210, 170)
-        else:
+        height_unit = st.radio("Unit", ["ft/in", "cm"], horizontal=True, label_visibility="collapsed")
+
+        if height_unit == "ft/in":
             col_ft, col_in = st.columns(2)
             with col_ft:
                 feet = st.number_input("Feet", min_value=4, max_value=7, value=5)
             with col_in:
                 inches = st.number_input("Inches", min_value=0, max_value=11, value=7)
-            # Convert to cm
             height = int((feet * 12 + inches) * 2.54)
             st.caption(f"= {height} cm")
+        else:
+            height = st.slider("Height (cm)", 150, 210, 170)
         
         # Discipline selection with explanation
         st.subheader("Discipline")
@@ -3428,41 +3521,57 @@ def main():
         # Users can only access this dashboard if they've completed payment
 
     if uploaded and video_type:
-        try:
+        # Use a cache key based on file name + size to detect new uploads
+        cache_key = f"{uploaded.name}_{len(uploaded.getvalue())}"
+
+        if st.session_state.get("analysis_cache_key") == cache_key and "analysis_results" in st.session_state:
+            # Reuse cached results — do NOT re-process
+            cached = st.session_state["analysis_results"]
+            summary = cached["summary"]
+            video_bytes = cached["video_bytes"]
+            pdf_buf = cached["pdf_buf"]
+            csv_buf = cached["csv_buf"]
+            zip_buf = cached["zip_buf"]
+            timestamp = cached["timestamp"]
+            plot_buf = cached["plot_buf"]
+            selected_camera = cached["selected_camera"]
+            selected_water = cached["selected_water"]
+        else:
+          try:
             manual_camera_view = selected_camera
             manual_water_position = selected_water
-    
+
             analyzer = SwimAnalyzer(athlete, conf_thresh, yaw_thresh,
                                     manual_camera_view=manual_camera_view,
                                     manual_water_position=manual_water_position)
-    
+
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_in:
                 tmp_in.write(uploaded.getvalue())
                 input_path = tmp_in.name
-    
+
             # ── PRE-CONVERT HEVC/MOV TO H.264 ──
             # iPhone screen recordings and many phone cameras use HEVC (H.265)
             # which OpenCV often can't decode. Convert to H.264 first.
             converted_path = None
             conversion_status = st.empty()
-            
+
             input_path_original = input_path  # keep reference for cleanup
             input_path, was_converted = preconvert_to_h264(input_path)
-            
+
             if was_converted:
                 converted_path = input_path  # track for cleanup
                 conversion_status.success("✅ Video optimized (converted to H.264, downscaled for performance)")
             elif not FFMPEG_AVAILABLE:
                 conversion_status.warning("⚠️ FFmpeg not available — using original file directly. "
                                           "If analysis fails, the video format may not be supported.")
-            
+
             # ── VALIDATE VIDEO CAN BE OPENED ──
             cap = cv2.VideoCapture(input_path)
-            
+
             # Free the in-memory upload buffer now that we've written to disk
             # This can reclaim 10-100MB depending on video size
             gc.collect()
-            
+
             if not cap.isOpened():
                 cap.release()
                 st.error("❌ **Could not open this video file.** "
@@ -3479,12 +3588,12 @@ def main():
                 except:
                     pass
                 st.stop()
-            
+
             fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            
+
             # Additional validation: check we can actually read frames
             if total == 0 or w == 0 or h == 0:
                 ret_test, frame_test = cap.read()
@@ -3507,90 +3616,116 @@ def main():
                     h = h_frame
                 # Reset capture to beginning
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-    
 
-            temp_raw_path = tempfile.NamedTemporaryFile(delete=False, suffix=".avi").name
-            fourcc = cv2.VideoWriter_fourcc(*'XVID')  # Use XVID for intermediate
-            writer = cv2.VideoWriter(temp_raw_path, fourcc, fps, (w, h))
-            
+            # --- OUTPUT VIDEO SETUP (PyAV preferred, OpenCV+FFmpeg fallback) ---
+            out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+            temp_raw_path = None  # Only used in fallback path
+            use_pyav = PYAV_AVAILABLE
+
+            if use_pyav:
+                # PyAV: write H.264 MP4 directly, frame by frame — no intermediate AVI
+                av_container = av.open(out_path, mode='w')
+                av_stream = av_container.add_stream('libx264', rate=int(fps))
+                av_stream.width = w
+                av_stream.height = h
+                av_stream.pix_fmt = 'yuv420p'
+                av_stream.options = {
+                    'preset': 'fast',
+                    'crf': '23',
+                    'movflags': '+faststart',
+                }
+            else:
+                # Fallback: OpenCV raw AVI → FFmpeg re-encode
+                temp_raw_path = tempfile.NamedTemporaryFile(delete=False, suffix=".avi").name
+                fourcc = cv2.VideoWriter_fourcc(*'XVID')
+                writer = cv2.VideoWriter(temp_raw_path, fourcc, fps, (w, h))
+
             st.markdown("### ⏳ Processing Video")
             processing_progress = st.progress(0)
             processing_status = st.empty()
-            
+
             frame_idx = 0
             while cap.isOpened():
                 ret, frame = cap.read()
                 if not ret: break
-            
+
                 timestamp_ms = frame_idx * 33 + 1
                 real_t = frame_idx / fps
-            
+
                 annotated, _ = analyzer.process(frame, real_t, timestamp_ms, fps)
-                writer.write(annotated)
-            
+
+                if use_pyav:
+                    av_frame = av.VideoFrame.from_ndarray(annotated, format='bgr24')
+                    for packet in av_stream.encode(av_frame):
+                        av_container.mux(packet)
+                else:
+                    writer.write(annotated)
+
                 frame_idx += 1
                 if total > 0:
                     processing_progress.progress(frame_idx / total)
                 processing_status.text(f"🎬 Analyzing frame {frame_idx}/{total}")
-            
-            cap.release()
-            writer.release()
-            processing_status.text("✅ Analysis complete!")
-            
-            # Free frame processing memory before re-encoding
-            gc.collect()
-            
-            # Re-encode to H.264 for web compatibility
-            st.markdown("### 🎥 Finalizing Video")
-            encoding_status = st.empty()
-            encoding_status.text("🔄 Converting to web-compatible format...")
-            
-            out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-            
-            if FFMPEG_AVAILABLE:
-                try:
-                    ffmpeg_cmd = [
-                        'ffmpeg', '-i', temp_raw_path,
-                        '-c:v', 'libx264',
-                        '-preset', 'fast',
-                        '-crf', '23',
-                        '-pix_fmt', 'yuv420p',
-                        '-movflags', '+faststart',
-                        '-y',
-                        out_path
-                    ]
-                    
-                    result = subprocess.run(
-                        ffmpeg_cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        timeout=300
-                    )
-                    
-                    if result.returncode != 0:
-                        raise Exception(f"FFmpeg exit code {result.returncode}")
-                    
-                    encoding_status.text("✅ Video conversion complete!")
-                    
-                except Exception as e:
-                    encoding_status.warning(f"⚠️ FFmpeg conversion issue: {e}. Using raw format.")
-                    shutil.copy(temp_raw_path, out_path)
-            else:
-                encoding_status.warning("⚠️ FFmpeg not available — video may not play in all browsers.")
-                shutil.copy(temp_raw_path, out_path)
 
-    
+            cap.release()
+
+            if use_pyav:
+                # Flush remaining packets
+                for packet in av_stream.encode():
+                    av_container.mux(packet)
+                av_container.close()
+                processing_status.text("✅ Analysis complete!")
+            else:
+                writer.release()
+                processing_status.text("✅ Analysis complete!")
+
+                # Free frame processing memory before re-encoding
+                gc.collect()
+
+                # Re-encode to H.264 for web compatibility
+                st.markdown("### 🎥 Finalizing Video")
+                encoding_status = st.empty()
+                encoding_status.text("🔄 Converting to web-compatible format...")
+
+                if FFMPEG_AVAILABLE:
+                    try:
+                        ffmpeg_cmd = [
+                            'ffmpeg', '-i', temp_raw_path,
+                            '-c:v', 'libx264',
+                            '-preset', 'fast',
+                            '-crf', '23',
+                            '-pix_fmt', 'yuv420p',
+                            '-movflags', '+faststart',
+                            '-threads', '1',
+                            '-y',
+                            out_path
+                        ]
+                        result = subprocess.run(
+                            ffmpeg_cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            timeout=300
+                        )
+                        if result.returncode != 0:
+                            raise Exception(f"FFmpeg exit code {result.returncode}")
+                        encoding_status.text("✅ Video conversion complete!")
+                    except Exception as e:
+                        encoding_status.warning(f"⚠️ FFmpeg conversion issue: {e}. Using raw format.")
+                        shutil.copy(temp_raw_path, out_path)
+                else:
+                    encoding_status.warning("⚠️ FFmpeg not available — video may not play in all browsers.")
+                    shutil.copy(temp_raw_path, out_path)
+
             # READ VIDEO BYTES BEFORE DELETING FILES
             with open(out_path, 'rb') as f:
                 video_bytes = f.read()
-    
+
             # PROCESS RESULTS (before cleanup)
             summary = analyzer.get_summary()
             plot_buf = generate_plots(analyzer)
             pdf_buf = generate_pdf_report(summary, uploaded.name, plot_buf)
             csv_buf = export_to_csv(analyzer)
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            
+
             # Create ZIP bundle with video bytes instead of file path
             zip_buf = io.BytesIO()
             with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -3598,23 +3733,44 @@ def main():
                 zipf.writestr(f"technique_report_{timestamp}.pdf", pdf_buf.getvalue())
                 zipf.writestr(f"frame_data_{timestamp}.csv", csv_buf.getvalue())
             zip_buf.seek(0)
-    
+
+            # Cache all results so reruns (e.g. from download buttons) skip re-processing
+            st.session_state["analysis_cache_key"] = cache_key
+            st.session_state["analysis_results"] = {
+                "summary": summary,
+                "video_bytes": video_bytes,
+                "pdf_buf": pdf_buf,
+                "csv_buf": csv_buf,
+                "zip_buf": zip_buf,
+                "timestamp": timestamp,
+                "plot_buf": plot_buf,
+                "selected_camera": selected_camera,
+                "selected_water": selected_water,
+            }
+
             # CLEANUP TEMP FILES (after everything is processed)
             try:
                 os.unlink(input_path_original)
                 os.unlink(out_path)
-                os.unlink(temp_raw_path)
+                if temp_raw_path and os.path.exists(temp_raw_path):
+                    os.unlink(temp_raw_path)
                 if converted_path and converted_path != input_path_original:
                     os.unlink(converted_path)
             except:
                 pass
-    
+
             analyzer.close()
-    
+
+          except Exception as e:
+            logging.exception("Processing error")
+            st.error("Something went wrong processing your video. Please try a different clip or contact support@swimform.ai.")
+
+        # === DISPLAY RESULTS (runs from cache or fresh) ===
+        if "analysis_results" in st.session_state and st.session_state.get("analysis_cache_key") == cache_key:
             st.success("✅ Analysis complete!")
-             
+
             # Display video type information - User selected vs Auto-detected
-            
+
             st.markdown("### 📹 Video Type")
             
             col_user, col_auto = st.columns(2)
@@ -3766,7 +3922,7 @@ def main():
             if video_bytes:
                 # st.video works better across platforms
                 st.video(video_bytes, format="video/mp4")
-                
+
                 # Also provide download link for the video separately
                 st.download_button(
                     "⬇️ Download Annotated Video",
@@ -3774,18 +3930,17 @@ def main():
                     f"annotated_swim_{timestamp}.mp4",
                     "video/mp4"
                 )
-    
-            # Download button
+
+            # Download buttons — seek to 0 before each so Streamlit can read them
+            pdf_buf.seek(0)
+            csv_buf.seek(0)
+            zip_buf.seek(0)
             st.download_button(
                 "📦 Download Full Results (ZIP)",
                 zip_buf,
                 f"swim_analysis_{timestamp}.zip",
                 "application/zip"
             )
-    
-        except Exception as e:
-            logging.exception("Processing error")
-            st.error("Something went wrong processing your video. Please try a different clip or contact support@swimform.ai.")
 
 if __name__ == "__main__":
     main()

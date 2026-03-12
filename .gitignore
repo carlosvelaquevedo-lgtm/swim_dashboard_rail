@@ -1,2 +1,7 @@
 # ─── Environment Variables — NEVER commit these ───────────────
 .env
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
