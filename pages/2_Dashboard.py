@@ -3446,13 +3446,55 @@ def main():
     
     if not FFMPEG_AVAILABLE:
         st.caption("⚠️ FFmpeg not detected on server — iPhone .MOV files may not process correctly. "
-                   "If your video fails, try converting to MP4 (H.264) before uploading.")
+                   "If your video fails, try converting to MP4 (H.264) before uploading. Max 30 seconds.")
     else:
-        st.caption("✅ All common video formats supported including iPhone recordings (.MOV/HEVC).")
+        st.caption("✅ All common video formats supported including iPhone recordings (.MOV/HEVC). Max 30 seconds.")
 
     if uploaded and len(uploaded.getvalue()) > 100 * 1024 * 1024:
         st.error("Video must be under 100MB. Please trim your clip.")
         st.stop()
+
+    # ── DURATION LIMIT: 30 seconds max ──
+    MAX_DURATION_SECONDS = 30
+
+    if uploaded:
+        # Write to temp file so ffprobe can check duration
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as _tmp_dur:
+            _tmp_dur.write(uploaded.getvalue())
+            _tmp_dur_path = _tmp_dur.name
+
+        # Reset the uploaded file buffer so it can be read again later
+        uploaded.seek(0)
+
+        video_duration = None
+        if FFMPEG_AVAILABLE:
+            try:
+                dur_result = subprocess.run(
+                    ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                     '-show_entries', 'format=duration',
+                     '-of', 'csv=p=0',
+                     _tmp_dur_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=15
+                )
+                video_duration = float(dur_result.stdout.decode().strip())
+            except Exception:
+                video_duration = None
+
+        # Clean up temp file (the real temp file is created later during processing)
+        try:
+            os.unlink(_tmp_dur_path)
+        except Exception:
+            pass
+
+        if video_duration is not None and video_duration > MAX_DURATION_SECONDS:
+            st.error(
+                f"⏱️ **Video is {video_duration:.0f} seconds — max is {MAX_DURATION_SECONDS} seconds.** "
+                f"Please trim your clip to 10–15 seconds of one stroke cycle for the best analysis. "
+                f"Shorter clips also produce more accurate biomechanics data."
+            )
+            st.stop()
 
     if uploaded:
         file_size_mb = len(uploaded.getvalue()) / (1024 * 1024)
