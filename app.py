@@ -81,14 +81,17 @@ st.markdown("""
 # =============================================
 import stripe
 
-STRIPE_PAYMENT_LINK = os.environ.get("STRIPE_PAYMENT_LINK", "")
-STRIPE_SECRET_KEY   = os.environ.get("STRIPE_SECRET_KEY", "")
-IS_DEV              = os.environ.get("IS_DEV", "false").lower() == "true"
+STRIPE_PAYMENT_LINK       = os.environ.get("STRIPE_PAYMENT_LINK", "")
+STRIPE_PAYMENT_LINK_COACH = os.environ.get("STRIPE_PAYMENT_LINK_COACH", "")
+STRIPE_SECRET_KEY         = os.environ.get("STRIPE_SECRET_KEY", "")
+IS_DEV                    = os.environ.get("IS_DEV", "false").lower() == "true"
 
 stripe.api_key = STRIPE_SECRET_KEY
 
 if "paid" not in st.session_state:
     st.session_state.paid = False
+if "report_mode" not in st.session_state:
+    st.session_state.report_mode = "swimmer"
 
 def show_landing_page():
     # --- 1. Header ---
@@ -321,22 +324,67 @@ def show_landing_page():
     """, unsafe_allow_html=True)
 
     # --- Pricing & CTA ---
-    col1, col2, col3 = st.columns([1, 1.8, 1])
-    with col2:
-        st.markdown("""
-        <div class="cta-box">
-            <div style="font-size: 0.9rem; color: #22d3ee; font-weight: 700; margin-bottom: 8px; letter-spacing: 1px;">INSTANT ANALYSIS</div>
-            <div style="font-size: 3.5rem; font-weight: 800; color: white;">$4.99 <span style="font-size: 1rem; color: #64748b; font-weight: 400;">/ video</span></div>
-            <p style="color: #94a3b8; margin: 15px 0 30px;">Full PDF Report • Side-by-Side Playback • Drill Cards</p>
+    st.markdown("""
+    <style>
+    .pricing-grid { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; position: relative; z-index: 1; margin-bottom: 20px; }
+    .pricing-card { flex: 1; min-width: 260px; max-width: 360px; background: rgba(15, 40, 71, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(6, 182, 212, 0.2); border-radius: 24px; padding: 32px 28px; text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.4); }
+    .pricing-card.coach { border-color: rgba(6, 182, 212, 0.5); position: relative; }
+    .badge { position: absolute; top: -14px; left: 50%; transform: translateX(-50%); background: #06b6d4; color: #0a1628; font-size: 0.75rem; font-weight: 800; padding: 4px 16px; border-radius: 20px; letter-spacing: 1px; }
+    .price-label { font-size: 0.8rem; color: #22d3ee; font-weight: 700; letter-spacing: 1px; margin-bottom: 6px; }
+    .price { font-size: 3rem; font-weight: 800; color: white; margin: 0 0 4px; }
+    .price-sub { font-size: 0.85rem; color: #64748b; margin-bottom: 16px; }
+    .feature-list { list-style: none; padding: 0; margin: 0 0 24px; text-align: left; }
+    .feature-list li { color: #94a3b8; font-size: 0.88rem; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .feature-list li::before { content: "✓ "; color: #22d3ee; font-weight: 700; }
+    @media (max-width: 600px) { .pricing-grid { flex-direction: column; align-items: center; } }
+    </style>
+    <div class="pricing-grid">
+        <div class="pricing-card">
+            <div class="price-label">SWIMMER REPORT</div>
+            <div class="price">$4.99</div>
+            <div class="price-sub">/ video</div>
+            <ul class="feature-list">
+                <li>Overall technique score</li>
+                <li>Top 3 issues in plain English</li>
+                <li>Personalized drill cards</li>
+                <li>Annotated video</li>
+                <li>PDF report</li>
+            </ul>
         </div>
-        """, unsafe_allow_html=True)
-        st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
-        st.link_button("🏊 Get My Biomechanics Report →", STRIPE_PAYMENT_LINK, type="primary", use_container_width=True)
+        <div class="pricing-card coach">
+            <div class="badge">MOST DATA</div>
+            <div class="price-label">COACH REPORT</div>
+            <div class="price">$6.99</div>
+            <div class="price-sub">/ video</div>
+            <ul class="feature-list">
+                <li>Everything in Swimmer PLUS:</li>
+                <li>Full metrics with thresholds &amp; zones</li>
+                <li>Component sub-scores</li>
+                <li>CSV frame data export</li>
+                <li>Analysis charts</li>
+                <li>Detailed technique panel in video</li>
+            </ul>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-        if IS_DEV:
-            if st.button("Developer: Skip to Dashboard", use_container_width=True):
-                st.session_state.paid = True
-                st.rerun()
+    col_sw, col_co = st.columns(2)
+    with col_sw:
+        if STRIPE_PAYMENT_LINK:
+            st.link_button("🏊 Get Swimmer Report →", STRIPE_PAYMENT_LINK, type="primary", use_container_width=True)
+        else:
+            st.info("Swimmer payment link not configured.")
+    with col_co:
+        if STRIPE_PAYMENT_LINK_COACH:
+            st.link_button("📊 Get Coach Report →", STRIPE_PAYMENT_LINK_COACH, use_container_width=True)
+        else:
+            st.info("Coach payment link not configured.")
+
+    if IS_DEV:
+        if st.button("Developer: Skip to Dashboard", use_container_width=True):
+            st.session_state.paid = True
+            st.session_state.report_mode = "coach"
+            st.rerun()
 
     # --- 4. The Analysis Engine (Full Restore) ---
     st.markdown('<h2 style="text-align:center; font-size:2.5rem; margin:60px 0 40px; position: relative; z-index: 1;">The Analysis Engine</h2>', unsafe_allow_html=True)
@@ -353,7 +401,7 @@ def show_landing_page():
     """, unsafe_allow_html=True)
 
     features = [
-        ("📊", "7 Biometrics", "Stroke rate, DPS, entry angle, elbow drop, and body rotation measured frame-by-frame."),
+        ("📊", "6 Biometrics", "Stroke rate, DPS, entry angle, elbow drop, body rotation, and kick depth measured frame-by-frame."),
         ("🎯", "Ranked Issues", "We rank your 1-3 biggest speed leaks so you know exactly what to fix first."),
         ("🏊", "Drill Prescription", "Personalized drills with rep counts and focus cues to correct your specific flaws."),
         ("🎥", "Pro Comparison", "Your stroke overlaid with Olympic-level reference footage for visual alignment."),
@@ -382,6 +430,7 @@ ADMIN_TOKEN_2 = os.environ.get("ADMIN_TOKEN_2", "")
 valid_tokens = [t for t in [ADMIN_TOKEN, ADMIN_TOKEN_2] if t]
 if valid_tokens and q.get("admin") in valid_tokens:
     st.session_state.paid = True
+    st.session_state.report_mode = "coach"
     st.query_params.clear()
     st.query_params["verified"] = "admin"
     st.rerun()
@@ -392,6 +441,7 @@ if "session_id" in q and not st.session_state.paid:
         session = stripe.checkout.Session.retrieve(session_id)
         if session.payment_status == "paid":
             st.session_state.paid = True
+            st.session_state.report_mode = session.metadata.get("report_mode", "swimmer")
             st.query_params.clear()
             st.query_params["verified"] = session_id
             st.balloons()
