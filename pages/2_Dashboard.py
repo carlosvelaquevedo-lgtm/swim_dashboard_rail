@@ -85,6 +85,9 @@ if not st.session_state.get("paid", False):
         expected = os.environ.get("ADMIN_TOKEN", "")
         if expected and admin_key == expected:
             st.session_state["paid"] = True
+            mode_param = st.query_params.get("report_mode", "swimmer")
+            if mode_param in ("swimmer", "coach"):
+                st.session_state["report_mode"] = mode_param
 
 if not st.session_state.get("paid", False) and not IS_DEV:
     st.error("⛔ Access denied. Please complete payment to access the dashboard.")
