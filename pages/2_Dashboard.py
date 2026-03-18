@@ -82,13 +82,17 @@ if not st.session_state.get("paid", False):
         if verify_stripe_payment(session_id):
             st.session_state["paid"] = True
     elif admin_key:
-        expected = os.environ.get("ADMIN_TOKEN", "")
-        if expected and admin_key == expected:
+        valid_tokens = [
+            os.environ.get("ADMIN_TOKEN", ""),
+            os.environ.get("ADMIN_TOKEN_2", ""),
+        ]
+        if admin_key in [t for t in valid_tokens if t]:
             st.session_state["paid"] = True
             mode_param = st.query_params.get("report_mode", "swimmer")
             if mode_param in ("swimmer", "coach"):
                 st.session_state["report_mode"] = mode_param
-
+            st.query_params.clear()
+            st.rerun()
 if not st.session_state.get("paid", False) and not IS_DEV:
     st.error("⛔ Access denied. Please complete payment to access the dashboard.")
     st.markdown("**[← Return to SwimForm AI](/)** to purchase your analysis.")
