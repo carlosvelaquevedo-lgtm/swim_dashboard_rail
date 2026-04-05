@@ -1935,7 +1935,45 @@ def validate_pose(lm_pixel, frame_bgr, frame_h, frame_w):
                     if (water_ratio + pool_mark_ratio) > 0.7 and skin_ratio < 0.05:
                         return False, "pool floor marking (water + marking colors)"
 
-        # 8. Check minimum body size relative to frame
+        # 8. WALL/DECK REGION DETECTION
+        # Reject poses detected in the top portion of frame (pool wall, deck, spectators)
+        # Pool walls with tiled patterns are a common source of MediaPipe false positives
+        all_y_coords = [p[1] for p in all_points]
+        avg_y = np.mean(all_y_coords)
+
+        if avg_y < frame_h * 0.28:
+            # Detection is in the top 28% of frame — almost certainly wall/deck
+            # Verify by checking if the region is water-colored or wall-colored
+            roi_cx = int(np.mean([p[0] for p in all_points]))
+            roi_cy = int(avg_y)
+            rx1 = max(0, roi_cx - 50)
+            rx2 = min(frame_w - 1, roi_cx + 50)
+            ry1 = max(0, roi_cy - 30)
+            ry2 = min(frame_h - 1, roi_cy + 30)
+
+            wall_roi = frame_bgr[ry1:ry2, rx1:rx2]
+            if wall_roi.size > 100:
+                hsv_wall = cv2.cvtColor(wall_roi, cv2.COLOR_BGR2HSV)
+                # Water hue check
+                lower_water = np.array([75, 25, 60])
+                upper_water = np.array([125, 255, 255])
+                water_mask = cv2.inRange(hsv_wall, lower_water, upper_water)
+                water_pct = np.sum(water_mask > 0) / (wall_roi.shape[0] * wall_roi.shape[1])
+
+                # Skin tone check
+                lower_skin = np.array([0, 20, 70])
+                upper_skin = np.array([25, 150, 255])
+                skin_mask = cv2.inRange(hsv_wall, lower_skin, upper_skin)
+                skin_pct = np.sum(skin_mask > 0) / (wall_roi.shape[0] * wall_roi.shape[1])
+
+                # If very little water AND very little skin = wall/deck
+                if water_pct < 0.15 and skin_pct < 0.10:
+                    return False, "wall/deck region detected"
+            else:
+                # Can't sample colors, but top-of-frame detection is suspicious
+                return False, "detection in wall region (top of frame)"
+
+        # 9. Check minimum body size relative to frame
         body_area = body_width * body_height
         frame_area = frame_w * frame_h
         body_ratio = body_area / frame_area
@@ -2022,6 +2060,11 @@ class SwimAnalyzer:
         # Glide tracking
         self.glide_frames = 0
 
+        # Water line auto-crop (pool wall mitigation)
+        self.water_line_y = None           # Detected y-coordinate of water surface
+        self.water_line_calibration = []   # Buffer for first N frames
+        self.crop_y_offset = 0             # How many pixels were cropped from top
+
     @st.cache_resource
     @staticmethod
     def _download_model(model_url: str, model_path: str, model_size: str):
@@ -2068,6 +2111,37 @@ class SwimAnalyzer:
         )
         return vision.PoseLandmarker.create_from_options(options)
 
+    def _detect_water_line(self, frame):
+        """
+        Detect the water line (boundary between pool deck/wall and water surface).
+        Scans horizontal strips from top down. Water is cyan/teal (HSV H≈80-120),
+        wall/deck is beige/tan/white (HSV H≈10-30 or low saturation).
+        Returns the y-coordinate of the water line, or None if not found.
+        """
+        h, w = frame.shape[:2]
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        # Scan in strips of 8 pixels from top to 60% of frame
+        strip_height = 8
+        scan_limit = int(h * 0.6)
+
+        for y in range(0, scan_limit, strip_height):
+            strip = hsv[y:y + strip_height, :, :]
+            if strip.size == 0:
+                continue
+
+            # Check what fraction of this strip is water-colored (cyan/teal hue)
+            lower_water = np.array([75, 25, 60])
+            upper_water = np.array([125, 255, 255])
+            water_mask = cv2.inRange(strip, lower_water, upper_water)
+            water_pct = np.sum(water_mask > 0) / (strip.shape[0] * strip.shape[1])
+
+            # If >40% of this strip is water-colored, we've found the water line
+            if water_pct > 0.40:
+                return y
+
+        return None
+
     def process(self, frame, t, timestamp_ms, fps=30.0):
         """
         Process a frame with pose detection.
@@ -2086,7 +2160,27 @@ class SwimAnalyzer:
             timestamp_ms = self.last_timestamp_ms + 1
         self.last_timestamp_ms = timestamp_ms
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # === WATER LINE AUTO-CROP ===
+        # Detect and crop above the water line to prevent pool wall false detections.
+        # Calibrates over the first 10 frames, then uses cached value.
+        if self.water_line_y is None and len(self.water_line_calibration) < 10:
+            wl = self._detect_water_line(frame)
+            if wl is not None:
+                self.water_line_calibration.append(wl)
+            if len(self.water_line_calibration) >= 5:
+                # Use the median of calibration samples (robust to outliers)
+                self.water_line_y = int(np.median(self.water_line_calibration))
+
+        # Apply crop if water line was detected
+        if self.water_line_y is not None:
+            # Leave a 20px margin above the water line to catch arm recovery
+            self.crop_y_offset = max(0, self.water_line_y - 20)
+            frame_for_detection = frame[self.crop_y_offset:, :]
+        else:
+            self.crop_y_offset = 0
+            frame_for_detection = frame
+
+        rgb = cv2.cvtColor(frame_for_detection, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
         result = self.landmarker.detect_for_video(mp_image, timestamp_ms)
@@ -2115,9 +2209,13 @@ class SwimAnalyzer:
         vis_sum = 0.0
         vis_count = 0
 
+        cropped_h, cropped_w = frame_for_detection.shape[:2]
         for name, idx in zip(landmark_names, indices):
             lm = landmarks[idx]
-            lm_pixel[name] = (lm.x * w, lm.y * h)
+            # Map landmarks back to original frame coordinates
+            px = lm.x * cropped_w
+            py = lm.y * cropped_h + self.crop_y_offset
+            lm_pixel[name] = (px, py)
             vis_sum += lm.visibility
             vis_count += 1
 
@@ -2318,7 +2416,8 @@ class SwimAnalyzer:
 
         # Draw landmarks
         for lm in landmarks:
-            x, y = int(lm.x * w), int(lm.y * h)
+            x = int(lm.x * (frame_for_detection.shape[1] if self.crop_y_offset > 0 else w))
+            y = int(lm.y * (frame_for_detection.shape[0] if self.crop_y_offset > 0 else h) + self.crop_y_offset)
             cv2.circle(frame, (x, y), 3, (0, 255, 128), -1)
 
         # NEW: Draw color-coded overlay zones
@@ -3473,7 +3572,9 @@ def main():
     st.markdown("AI-powered analysis with **enhanced biomechanical metrics**")
     
     # Important notice about video requirements
-    st.warning("⚠️ **Full body must be visible for an accurate analysis.** Ensure the swimmer's entire body (head to feet) is in frame throughout the video.")
+    st.warning("⚠️ **For best results:** Film at water level with the swimmer filling most of the frame. "
+               "Minimize pool wall/deck visible above the water — tiled or patterned walls can interfere with tracking. "
+               "The swimmer's full body (head to feet) should be visible throughout.")
 
     if not MEDIAPIPE_TASKS_AVAILABLE:
         st.error("MediaPipe Tasks not installed. Run: pip install mediapipe>=0.10.14")
