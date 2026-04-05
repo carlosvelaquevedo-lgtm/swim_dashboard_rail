@@ -1935,45 +1935,7 @@ def validate_pose(lm_pixel, frame_bgr, frame_h, frame_w):
                     if (water_ratio + pool_mark_ratio) > 0.7 and skin_ratio < 0.05:
                         return False, "pool floor marking (water + marking colors)"
 
-        # 8. WALL/DECK REGION DETECTION
-        # Reject poses detected in the top portion of frame (pool wall, deck, spectators)
-        # Pool walls with tiled patterns are a common source of MediaPipe false positives
-        all_y_coords = [p[1] for p in all_points]
-        avg_y = np.mean(all_y_coords)
-
-        if avg_y < frame_h * 0.28:
-            # Detection is in the top 28% of frame — almost certainly wall/deck
-            # Verify by checking if the region is water-colored or wall-colored
-            roi_cx = int(np.mean([p[0] for p in all_points]))
-            roi_cy = int(avg_y)
-            rx1 = max(0, roi_cx - 50)
-            rx2 = min(frame_w - 1, roi_cx + 50)
-            ry1 = max(0, roi_cy - 30)
-            ry2 = min(frame_h - 1, roi_cy + 30)
-
-            wall_roi = frame_bgr[ry1:ry2, rx1:rx2]
-            if wall_roi.size > 100:
-                hsv_wall = cv2.cvtColor(wall_roi, cv2.COLOR_BGR2HSV)
-                # Water hue check
-                lower_water = np.array([75, 25, 60])
-                upper_water = np.array([125, 255, 255])
-                water_mask = cv2.inRange(hsv_wall, lower_water, upper_water)
-                water_pct = np.sum(water_mask > 0) / (wall_roi.shape[0] * wall_roi.shape[1])
-
-                # Skin tone check
-                lower_skin = np.array([0, 20, 70])
-                upper_skin = np.array([25, 150, 255])
-                skin_mask = cv2.inRange(hsv_wall, lower_skin, upper_skin)
-                skin_pct = np.sum(skin_mask > 0) / (wall_roi.shape[0] * wall_roi.shape[1])
-
-                # If very little water AND very little skin = wall/deck
-                if water_pct < 0.15 and skin_pct < 0.10:
-                    return False, "wall/deck region detected"
-            else:
-                # Can't sample colors, but top-of-frame detection is suspicious
-                return False, "detection in wall region (top of frame)"
-
-        # 9. Check minimum body size relative to frame
+        # 8. Check minimum body size relative to frame
         body_area = body_width * body_height
         frame_area = frame_w * frame_h
         body_ratio = body_area / frame_area
@@ -3967,9 +3929,13 @@ def main():
             analyzer.close()
 
           except Exception as e:
+            import traceback
+            tb_str = traceback.format_exc()
             logging.exception(f"Processing error: {type(e).__name__}: {e}")
             st.error(f"Something went wrong processing your video. Error: {type(e).__name__}. "
                      "Please try a different clip or contact info@swimform-ai.com")
+            with st.expander("🔍 Debug Details (click to expand)"):
+                st.code(tb_str, language="python")
 
         # === DISPLAY RESULTS (runs from cache or fresh) ===
         if "analysis_results" in st.session_state and st.session_state.get("analysis_cache_key") == cache_key:
