@@ -590,7 +590,7 @@ def render_swim_metrics_component(metrics: dict, height: int = 420):
 # CONSTANTS & DEFAULTS - Updated thresholds
 # ─────────────────────────────────────────────
 
-DEFAULT_CONF_THRESHOLD = 0.5
+DEFAULT_CONF_THRESHOLD = 0.4
 DEFAULT_YAW_THRESHOLD = 0.15
 MIN_BREATH_GAP_S = 1.0
 MIN_BREATH_HOLD_FRAMES = 4
@@ -2096,9 +2096,9 @@ class SwimAnalyzer:
             base_options=base_options,
             running_mode=vision.RunningMode.VIDEO,
             num_poses=1,
-            min_pose_detection_confidence=0.5,
-            min_pose_presence_confidence=0.5,
-            min_tracking_confidence=0.5,
+            min_pose_detection_confidence=0.35,
+            min_pose_presence_confidence=0.35,
+            min_tracking_confidence=0.35,
             output_segmentation_masks=False
         )
         return vision.PoseLandmarker.create_from_options(options)
@@ -3554,7 +3554,7 @@ def main():
         # Detection Settings with explanations
         st.subheader("Detection Settings")
         
-        conf_thresh = st.slider("Confidence Threshold", 0.3, 0.7, DEFAULT_CONF_THRESHOLD, 0.05)
+        conf_thresh = st.slider("Confidence Threshold", 0.2, 0.7, DEFAULT_CONF_THRESHOLD, 0.05)
         st.caption("""
         **What it does**: Filters out frames where pose detection is uncertain.  
         **Ideal setting**: **0.5** (default) - balances accuracy with data retention.  
@@ -3978,6 +3978,26 @@ def main():
 
             if report_mode == "swimmer":
                 # ─── SWIMMER VIEW ───────────────────────────────────────────
+                # Guard: if no frames were actually analyzed, show a clear message
+                if summary.total_analyzed_frames == 0:
+                    st.warning(
+                        "⚠️ **We couldn't detect a swimmer in this video.**\n\n"
+                        "This usually happens when:\n"
+                        "- The swimmer is too far from the camera\n"
+                        "- The swimmer is mostly submerged with little body visible\n"
+                        "- The video angle makes it hard to identify a human shape\n\n"
+                        "**Tips for better results:**\n"
+                        "- Film from poolside, 3-5 meters from the swimmer\n"
+                        "- Keep the camera at water level\n"
+                        "- Make sure the swimmer's upper body is visible above water\n"
+                        "- A side view of freestyle works best"
+                    )
+                    # Still show the annotated video so user can see what happened
+                    if video_bytes:
+                        st.subheader("📹 Annotated Video")
+                        st.video(io.BytesIO(video_bytes))
+                    # Skip the rest of the swimmer results display
+                    st.stop()
                 score_color = "#22c55e" if summary.avg_score >= 70 else "#eab308" if summary.avg_score >= 50 else "#ef4444"
                 score_label = "Great" if summary.avg_score >= 70 else "Good" if summary.avg_score >= 50 else "Needs Work"
                 st.markdown(f"""
@@ -4069,6 +4089,17 @@ def main():
 
             else:
                 # ─── COACH VIEW (full detail) ────────────────────────────────
+                if summary.total_analyzed_frames == 0:
+                    st.warning(
+                        "⚠️ **No swimmer detected in this video.**\n\n"
+                        "The pose detection model could not identify a swimmer. "
+                        "This may be due to camera distance, angle, or the swimmer being mostly submerged.\n\n"
+                        "Try a clip filmed from poolside, 3-5m away, at water level."
+                    )
+                    if video_bytes:
+                        st.subheader("📹 Annotated Video")
+                        st.video(io.BytesIO(video_bytes))
+                    st.stop()
                 # Display video type information - User selected vs Auto-detected
                 st.markdown("### 📹 Video Type")
                 col_user, col_auto = st.columns(2)
