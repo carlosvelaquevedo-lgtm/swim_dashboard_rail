@@ -2060,11 +2060,6 @@ class SwimAnalyzer:
         # Glide tracking
         self.glide_frames = 0
 
-        # Water line auto-crop (pool wall mitigation)
-        self.water_line_y = None           # Detected y-coordinate of water surface
-        self.water_line_calibration = []   # Buffer for first N frames
-        self.crop_y_offset = 0             # How many pixels were cropped from top
-
     @st.cache_resource
     @staticmethod
     def _download_model(model_url: str, model_path: str, model_size: str):
@@ -2111,37 +2106,6 @@ class SwimAnalyzer:
         )
         return vision.PoseLandmarker.create_from_options(options)
 
-    def _detect_water_line(self, frame):
-        """
-        Detect the water line (boundary between pool deck/wall and water surface).
-        Scans horizontal strips from top down. Water is cyan/teal (HSV H≈80-120),
-        wall/deck is beige/tan/white (HSV H≈10-30 or low saturation).
-        Returns the y-coordinate of the water line, or None if not found.
-        """
-        h, w = frame.shape[:2]
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-        # Scan in strips of 8 pixels from top to 60% of frame
-        strip_height = 8
-        scan_limit = int(h * 0.6)
-
-        for y in range(0, scan_limit, strip_height):
-            strip = hsv[y:y + strip_height, :, :]
-            if strip.size == 0:
-                continue
-
-            # Check what fraction of this strip is water-colored (cyan/teal hue)
-            lower_water = np.array([75, 25, 60])
-            upper_water = np.array([125, 255, 255])
-            water_mask = cv2.inRange(strip, lower_water, upper_water)
-            water_pct = np.sum(water_mask > 0) / (strip.shape[0] * strip.shape[1])
-
-            # If >40% of this strip is water-colored, we've found the water line
-            if water_pct > 0.40:
-                return y
-
-        return None
-
     def process(self, frame, t, timestamp_ms, fps=30.0):
         """
         Process a frame with pose detection.
@@ -2160,27 +2124,7 @@ class SwimAnalyzer:
             timestamp_ms = self.last_timestamp_ms + 1
         self.last_timestamp_ms = timestamp_ms
 
-        # === WATER LINE AUTO-CROP ===
-        # Detect and crop above the water line to prevent pool wall false detections.
-        # Calibrates over the first 10 frames, then uses cached value.
-        if self.water_line_y is None and len(self.water_line_calibration) < 10:
-            wl = self._detect_water_line(frame)
-            if wl is not None:
-                self.water_line_calibration.append(wl)
-            if len(self.water_line_calibration) >= 5:
-                # Use the median of calibration samples (robust to outliers)
-                self.water_line_y = int(np.median(self.water_line_calibration))
-
-        # Apply crop if water line was detected
-        if self.water_line_y is not None:
-            # Leave a 20px margin above the water line to catch arm recovery
-            self.crop_y_offset = max(0, self.water_line_y - 20)
-            frame_for_detection = frame[self.crop_y_offset:, :]
-        else:
-            self.crop_y_offset = 0
-            frame_for_detection = frame
-
-        rgb = cv2.cvtColor(frame_for_detection, cv2.COLOR_BGR2RGB)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
         result = self.landmarker.detect_for_video(mp_image, timestamp_ms)
@@ -2209,13 +2153,9 @@ class SwimAnalyzer:
         vis_sum = 0.0
         vis_count = 0
 
-        cropped_h, cropped_w = frame_for_detection.shape[:2]
         for name, idx in zip(landmark_names, indices):
             lm = landmarks[idx]
-            # Map landmarks back to original frame coordinates
-            px = lm.x * cropped_w
-            py = lm.y * cropped_h + self.crop_y_offset
-            lm_pixel[name] = (px, py)
+            lm_pixel[name] = (lm.x * w, lm.y * h)
             vis_sum += lm.visibility
             vis_count += 1
 
@@ -2416,8 +2356,7 @@ class SwimAnalyzer:
 
         # Draw landmarks
         for lm in landmarks:
-            x = int(lm.x * (frame_for_detection.shape[1] if self.crop_y_offset > 0 else w))
-            y = int(lm.y * (frame_for_detection.shape[0] if self.crop_y_offset > 0 else h) + self.crop_y_offset)
+            x, y = int(lm.x * w), int(lm.y * h)
             cv2.circle(frame, (x, y), 3, (0, 255, 128), -1)
 
         # NEW: Draw color-coded overlay zones
@@ -4028,8 +3967,9 @@ def main():
             analyzer.close()
 
           except Exception as e:
-            logging.exception("Processing error")
-            st.error("Something went wrong processing your video. Please try a different clip or contact info@swimform-ai.com")
+            logging.exception(f"Processing error: {type(e).__name__}: {e}")
+            st.error(f"Something went wrong processing your video. Error: {type(e).__name__}. "
+                     "Please try a different clip or contact info@swimform-ai.com")
 
         # === DISPLAY RESULTS (runs from cache or fresh) ===
         if "analysis_results" in st.session_state and st.session_state.get("analysis_cache_key") == cache_key:
