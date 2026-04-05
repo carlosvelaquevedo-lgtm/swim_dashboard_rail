@@ -5,7 +5,13 @@ RUN apt-get update && apt-get install -y \
     libxcb-shm0 \
     libxcb-render0 \
     libgl1 \
+    libgl1-mesa-glx \
+    libegl1-mesa \
+    libgles2-mesa \
     libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
