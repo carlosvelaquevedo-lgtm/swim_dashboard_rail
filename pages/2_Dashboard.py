@@ -1886,13 +1886,47 @@ def validate_pose(lm_pixel, frame_bgr, frame_h, frame_w):
             if y < -frame_h * margin or y > frame_h * (1 + margin):
                 return False, f"{name} out of frame vertically"
 
+        # 7. WALL/DECK REGION DETECTION
+        # Reject poses detected in the upper portion of the frame (pool wall, deck, spectators)
+        # Pool walls with tiled/dotted patterns are a common MediaPipe false positive source.
+        # Strategy: a real swimmer is always partially surrounded by water. If the pose
+        # centroid is in the top 45% of frame AND the surrounding region has very little
+        # water color, reject it as a wall/deck detection.
+        all_points = [nose, left_shoulder, right_shoulder, mid_hip, left_ankle, right_ankle]
+        all_y_coords = [p[1] for p in all_points]
+        avg_y = np.mean(all_y_coords)
+
+        if avg_y < frame_h * 0.45:
+            # Pose centroid is in upper portion — check for water around the detection
+            all_x_coords = [p[0] for p in all_points]
+            roi_min_x = max(0, int(min(all_x_coords)) - 20)
+            roi_max_x = min(frame_w - 1, int(max(all_x_coords)) + 20)
+            roi_min_y = max(0, int(min(all_y_coords)) - 20)
+            roi_max_y = min(frame_h - 1, int(max(all_y_coords)) + 20)
+
+            if roi_max_x > roi_min_x + 10 and roi_max_y > roi_min_y + 10:
+                wall_roi = frame_bgr[roi_min_y:roi_max_y, roi_min_x:roi_max_x]
+                if wall_roi.size > 100:
+                    hsv_wall = cv2.cvtColor(wall_roi, cv2.COLOR_BGR2HSV)
+                    # Water detection: pool water is typically H=75-125, S>25, V>60
+                    lower_water = np.array([75, 25, 60])
+                    upper_water = np.array([125, 255, 255])
+                    water_mask = cv2.inRange(hsv_wall, lower_water, upper_water)
+                    water_pct = np.sum(water_mask > 0) / (wall_roi.shape[0] * wall_roi.shape[1])
+
+                    # A real swimmer at the waterline will have at least 25% water nearby.
+                    # Wall/deck detections typically have <20% water (some blue tile dots).
+                    if water_pct < 0.25:
+                        return False, "wall/deck region detected (no water around pose)"
+            else:
+                return False, "detection in wall region (top of frame)"
+
         # === POOL FLOOR MARKING DETECTION ===
         # Pool floor markings are:
         # - Located in bottom portion of frame (in above-water footage)
         # - Dark blue/teal colored (not skin tones)
 
-        # 7. Check if all major body points are in bottom 60% of frame
-        all_points = [nose, left_shoulder, right_shoulder, mid_hip, left_ankle, right_ankle]
+        # 8. Check if all major body points are in bottom 60% of frame (reuse all_points from check 7 above)
         points_in_bottom = sum(1 for p in all_points if p[1] > frame_h * 0.4)
 
         if points_in_bottom >= 5:  # Most points in bottom portion
@@ -1935,38 +1969,6 @@ def validate_pose(lm_pixel, frame_bgr, frame_h, frame_w):
                     # If very high water color + pool marking and no skin = floor marking
                     if (water_ratio + pool_mark_ratio) > 0.7 and skin_ratio < 0.05:
                         return False, "pool floor marking (water + marking colors)"
-
-        # 8. WALL/DECK REGION DETECTION
-        # Reject poses detected in the top portion of frame (pool wall, deck, spectators)
-        # Pool walls with tiled patterns are a common source of MediaPipe false positives
-        all_y_coords = [p[1] for p in all_points]
-        avg_y = np.mean(all_y_coords)
-
-        if avg_y < frame_h * 0.28:
-            roi_cx = int(np.mean([p[0] for p in all_points]))
-            roi_cy = int(avg_y)
-            rx1 = max(0, roi_cx - 50)
-            rx2 = min(frame_w - 1, roi_cx + 50)
-            ry1 = max(0, roi_cy - 30)
-            ry2 = min(frame_h - 1, roi_cy + 30)
-
-            wall_roi = frame_bgr[ry1:ry2, rx1:rx2]
-            if wall_roi.size > 100:
-                hsv_wall = cv2.cvtColor(wall_roi, cv2.COLOR_BGR2HSV)
-                lower_water = np.array([75, 25, 60])
-                upper_water = np.array([125, 255, 255])
-                water_mask = cv2.inRange(hsv_wall, lower_water, upper_water)
-                water_pct = np.sum(water_mask > 0) / (wall_roi.shape[0] * wall_roi.shape[1])
-
-                lower_skin = np.array([0, 20, 70])
-                upper_skin = np.array([25, 150, 255])
-                skin_mask = cv2.inRange(hsv_wall, lower_skin, upper_skin)
-                skin_pct = np.sum(skin_mask > 0) / (wall_roi.shape[0] * wall_roi.shape[1])
-
-                if water_pct < 0.15 and skin_pct < 0.10:
-                    return False, "wall/deck region detected"
-            else:
-                return False, "detection in wall region (top of frame)"
 
         # 9. Check minimum body size relative to frame
         body_area = body_width * body_height
