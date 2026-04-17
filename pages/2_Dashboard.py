@@ -21,6 +21,8 @@ import subprocess
 import shutil
 import gc
 
+from analytics import track
+
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image as RLImage
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.pagesizes import letter
@@ -67,7 +69,10 @@ def verify_stripe_payment(session_id: str) -> bool:
         if not stripe.api_key:
             return False
         session = stripe.checkout.Session.retrieve(session_id)
-        return session.payment_status == "paid"
+        if session.payment_status == "paid":
+            track("payment_completed", {"session_id": session_id})
+            return True
+        return False
     except Exception as e:
         logging.error(f"Stripe verification error: {e}")
         st.error("Payment verification failed. Please try again or contact info@swimform-ai.com")
@@ -88,6 +93,7 @@ if not st.session_state.get("paid", False):
         ]
         if admin_key in [t for t in valid_tokens if t]:
             st.session_state["paid"] = True
+            track("admin_access", {"method": "admin_key"})
             mode_param = st.query_params.get("report_mode", "swimmer")
             if mode_param in ("swimmer", "coach"):
                 st.session_state["report_mode"] = mode_param
@@ -3598,6 +3604,9 @@ def main():
 
     st.subheader("📹 Step 1: Upload Your Video")
     uploaded = st.file_uploader("Upload swimming video", type=["mp4", "mov", "avi", "MOV", "MP4", "AVI", "m4v", "M4V"])
+    if uploaded and "upload_tracked" not in st.session_state:
+        track("video_uploaded", {"filename": uploaded.name, "size_mb": round(len(uploaded.getvalue()) / (1024 * 1024), 1)})
+        st.session_state.upload_tracked = True
     
     if not FFMPEG_AVAILABLE:
         st.caption("⚠️ FFmpeg not detected on server — iPhone .MOV files may not process correctly. "
@@ -3737,6 +3746,10 @@ def main():
           try:
             manual_camera_view = selected_camera
             manual_water_position = selected_water
+
+            if "analysis_tracked" not in st.session_state:
+                track("analysis_started", {"video_type": video_type})
+                st.session_state.analysis_tracked = True
 
             analyzer = SwimAnalyzer(athlete, conf_thresh, yaw_thresh,
                                     manual_camera_view=manual_camera_view,

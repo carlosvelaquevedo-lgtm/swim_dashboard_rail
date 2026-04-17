@@ -4,6 +4,8 @@ import base64
 import os
 
 from dotenv import load_dotenv
+from analytics import track
+
 load_dotenv()
 
 # =============================================
@@ -15,6 +17,10 @@ st.set_page_config(
     layout="centered",
     initial_sidebar_state="collapsed"
 )
+
+if "landing_tracked" not in st.session_state:
+    track("landing_viewed", {"page": "landing"})
+    st.session_state.landing_tracked = True
 
 # =============================================
 # CSS STYLING (Background & Theme)
@@ -371,11 +377,13 @@ def show_landing_page():
     col_sw, col_co = st.columns(2)
     with col_sw:
         if STRIPE_PAYMENT_LINK:
+            track("checkout_button_rendered", {"tier": "swimmer"})
             st.link_button("🏊 Get Swimmer Report →", STRIPE_PAYMENT_LINK, type="primary", use_container_width=True)
         else:
             st.info("Swimmer payment link not configured.")
     with col_co:
         if STRIPE_PAYMENT_LINK_COACH:
+            track("checkout_button_rendered", {"tier": "coach"})
             st.link_button("📊 Get Coach Report →", STRIPE_PAYMENT_LINK_COACH, use_container_width=True)
         else:
             st.info("Coach payment link not configured.")

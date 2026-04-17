@@ -8,3 +8,4 @@ reportlab>=4.0.0
 av>=11.0.0              
 stripe>=7.0.0
 python-dotenv
+posthog>=3.5.0
