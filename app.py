@@ -123,100 +123,16 @@ def show_landing_page():
     </div>
     """, unsafe_allow_html=True)
 
-    # --- 2. How It Works ---
     st.markdown("""
-    <style>
-    .process-section { padding: 40px 0 60px 0; text-align: center; position: relative; z-index: 1; width: 100%; }
-    .process-title { font-size: 2.8rem; font-weight: 700; margin-bottom: 50px; color: white !important; }
-    
-    .process-grid { 
-        display: flex; 
-        justify-content: center; 
-        align-items: stretch; 
-        gap: 10px; 
-        flex-wrap: nowrap; 
-        max-width: 900px; 
-        margin: 0 auto; 
-    }
-    
-    .process-card { 
-        background: linear-gradient(180deg, rgba(20,50,90,0.9), rgba(15,40,71,0.9)); 
-        border-radius: 20px; 
-        padding: 20px 12px; 
-        width: 175px; 
-        border: 1px solid rgba(34,211,238,0.15); 
-        text-align: center; 
-        display: flex; flex-direction: column; align-items: center;
-        box-shadow: 0 10px 20px rgba(0,0,0,0.2);
-        cursor: default;
-        text-decoration: none;
-    }
-    
-    .process-number { 
-        width: 32px; height: 32px; margin-bottom: 12px; border-radius: 50%; 
-        background: #0a1628;
-        color: white;
-        border: none;
-        font-weight: 800; 
-        display: flex; align-items: center; justify-content: center; flex-shrink: 0; 
-    }
-    
-    .process-card h3 { color: #22d3ee !important; margin-bottom: 8px; font-size: 1rem; min-height: 30px; display: flex; align-items: center; justify-content: center;}
-    .process-card p { color: #94a3b8 !important; font-size: 0.8rem; line-height: 1.3; margin: 0; text-align: center; }
-    .process-arrow { font-size: 1.2rem; color: rgba(34,211,238,0.4); font-weight: bold; align-self: center; }
-    
-    .angle-list { 
-        text-align: center !important; 
-        font-size: 0.7rem !important; 
-        color: #cbd5e1 !important; 
-        margin-top: 5px; 
-        width: 100%; 
-        padding-left: 0;
-    }
-    .angle-list span { display: block; margin-bottom: 2px; }
-    .highlight { color: #10b981; font-weight: 700; }
-
-    @media (max-width: 768px) { 
-        .process-grid { flex-wrap: wrap; }
-        .process-arrow { display: none; } 
-        .process-card { width: 45%; }
-    }
-    </style>
-    
-    <div class="process-section">
-        <div class="process-title">How it works</div>
-        <div class="process-grid">
-            <div class="process-card">
-                <div class="process-number">1</div>
-                <h3>Pay $4.99</h3>
-                <p>Secure checkout via Stripe. Instant access.</p>
-            </div>
-            <div class="process-arrow">→</div>
-            <div class="process-card">
-                <div class="process-number">2</div>
-                <h3>Upload Video</h3>
-                <p>10–15s clip. Ensure good lighting.</p>
-            </div>
-            <div class="process-arrow">→</div>
-            <div class="process-card">
-                <div class="process-number">3</div>
-                <h3>Choose Angle View</h3>
-                <div class="angle-list">
-                    <span>Side & Underwater <span class="highlight">(Best)</span></span>
-                    <span>Side & Above water</span>
-                    <span>Front & Underwater</span>
-                    <span>Front & Above water</span>
-                </div>
-            </div>
-            <div class="process-arrow">→</div>
-            <div class="process-card">
-                <div class="process-number">4</div>
-                <h3>Get Report</h3>
-                <p>AI analysis in 90s. Download PDF + video.</p>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+<div style="text-align: center; margin: 10px 0 40px; position: relative; z-index: 1;">
+    <h1 style="color: white; font-size: 2.4rem; font-weight: 800; margin: 0 0 12px; line-height: 1.15;">
+        Find your 3 biggest freestyle <span style="color: #22d3ee;">speed leaks</span> in 90 seconds.
+    </h1>
+    <p style="color: #94a3b8; font-size: 1.05rem; max-width: 640px; margin: 0 auto; line-height: 1.5;">
+        Frame-by-frame biomechanics analysis from a single side-view clip. Built by a 4x 70.3 + Ironman finisher who got tired of guessing.
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
     # --- 3. VIDEO & HUD (Mobile Optimized) ---
     def get_video_base64(video_path):
@@ -328,6 +244,119 @@ def show_landing_page():
         </iframe>
     </div>
     """, unsafe_allow_html=True)
+
+    st.markdown("""
+<style>
+.process-section { padding: 40px 0 20px 0; text-align: center; position: relative; z-index: 1; width: 100%; }
+.process-title { font-size: 2.4rem; font-weight: 700; margin-bottom: 40px; color: white !important; }
+
+.process-grid { 
+    display: flex; 
+    justify-content: center; 
+    align-items: stretch; 
+    gap: 12px; 
+    flex-wrap: nowrap; 
+    max-width: 780px; 
+    margin: 0 auto; 
+}
+
+.process-card { 
+    background: linear-gradient(180deg, rgba(20,50,90,0.9), rgba(15,40,71,0.9)); 
+    border-radius: 20px; 
+    padding: 22px 14px; 
+    width: 220px; 
+    border: 1px solid rgba(34,211,238,0.15); 
+    text-align: center; 
+    display: flex; flex-direction: column; align-items: center;
+    box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+    cursor: default;
+    text-decoration: none;
+}
+
+.process-number { 
+    width: 32px; height: 32px; margin-bottom: 12px; border-radius: 50%; 
+    background: #0a1628;
+    color: white;
+    border: none;
+    font-weight: 800; 
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0; 
+}
+
+.process-card h3 { color: #22d3ee !important; margin-bottom: 8px; font-size: 1.05rem; min-height: 30px; display: flex; align-items: center; justify-content: center;}
+.process-card p { color: #94a3b8 !important; font-size: 0.85rem; line-height: 1.35; margin: 0; text-align: center; }
+.process-arrow { font-size: 1.4rem; color: rgba(34,211,238,0.4); font-weight: bold; align-self: center; }
+
+.angle-list { 
+    text-align: center !important; 
+    font-size: 0.72rem !important; 
+    color: #cbd5e1 !important; 
+    margin-top: 5px; 
+    width: 100%; 
+    padding-left: 0;
+}
+.angle-list span { display: block; margin-bottom: 2px; }
+.highlight { color: #10b981; font-weight: 700; }
+
+@media (max-width: 768px) { 
+    .process-grid { flex-wrap: wrap; }
+    .process-arrow { display: none; } 
+    .process-card { width: 45%; }
+}
+</style>
+
+<div class="process-section">
+    <div class="process-title">How it works</div>
+    <div class="process-grid">
+        <div class="process-card">
+            <div class="process-number">1</div>
+            <h3>Upload Video</h3>
+            <p>10–15s side-view freestyle clip. Phone camera works fine.</p>
+        </div>
+        <div class="process-arrow">→</div>
+        <div class="process-card">
+            <div class="process-number">2</div>
+            <h3>Choose Angle View</h3>
+            <div class="angle-list">
+                <span>Side & Underwater <span class="highlight">(Best)</span></span>
+                <span>Side & Above water</span>
+                <span>Front & Underwater</span>
+                <span>Front & Above water</span>
+            </div>
+        </div>
+        <div class="process-arrow">→</div>
+        <div class="process-card">
+            <div class="process-number">3</div>
+            <h3>Get Report</h3>
+            <p>AI analysis in 90s. Annotated video + PDF report.</p>
+        </div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown("""
+<div style="max-width: 720px; margin: 50px auto 30px; padding: 32px; background: rgba(15, 40, 71, 0.4); border: 1px solid rgba(34, 211, 238, 0.15); border-radius: 20px; position: relative; z-index: 1;">
+    <p style="color: #22d3ee; font-size: 0.8rem; font-weight: 700; letter-spacing: 1.5px; margin: 0 0 16px; text-align: center;">WHY I BUILT THIS</p>
+    <p style="color: #cbd5e1; font-size: 0.98rem; line-height: 1.6; margin: 0 0 24px; text-align: center;">
+        I'm Carlos — 4x 70.3 and Ironman finisher based in Houston. I got tired of training more without swimming faster. Built SwimForm AI to find what I couldn't see at full speed. Same race, two years apart:
+    </p>
+    <div style="display: flex; justify-content: center; align-items: center; gap: 24px; flex-wrap: wrap; margin: 0 auto;">
+        <div style="text-align: center; min-width: 130px;">
+            <div style="color: #64748b; font-size: 0.75rem; font-weight: 700; letter-spacing: 1px; margin-bottom: 6px;">BEFORE</div>
+            <div style="color: #94a3b8; font-size: 1.8rem; font-weight: 800; font-family: 'Space Mono', monospace;">1:05:03</div>
+            <div style="color: #64748b; font-size: 0.75rem; margin-top: 4px;">70.3 swim split</div>
+        </div>
+        <div style="color: #22d3ee; font-size: 1.5rem; font-weight: 800;">→</div>
+        <div style="text-align: center; min-width: 130px;">
+            <div style="color: #10b981; font-size: 0.75rem; font-weight: 700; letter-spacing: 1px; margin-bottom: 6px;">AFTER</div>
+            <div style="color: white; font-size: 1.8rem; font-weight: 800; font-family: 'Space Mono', monospace;">0:44:17</div>
+            <div style="color: #64748b; font-size: 0.75rem; margin-top: 4px;">70.3 swim split</div>
+        </div>
+    </div>
+    <p style="color: #22d3ee; font-size: 1.1rem; font-weight: 700; margin: 20px 0 0; text-align: center;">
+        −20:46 off the same race. Technique was the unlock.
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
     # --- Pricing & CTA ---
     st.markdown("""
