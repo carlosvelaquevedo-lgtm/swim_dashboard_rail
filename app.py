@@ -89,6 +89,9 @@ import stripe
 
 STRIPE_PAYMENT_LINK       = os.environ.get("STRIPE_PAYMENT_LINK", "")
 STRIPE_PAYMENT_LINK_COACH = os.environ.get("STRIPE_PAYMENT_LINK_COACH", "")
+STRIPE_PAYMENT_LINK_FOUNDING = os.environ.get("STRIPE_PAYMENT_LINK_FOUNDING", "")
+POSTHOG_PUBLIC_KEY = os.environ.get("POSTHOG_PUBLIC_KEY", "")
+POSTHOG_HOST = os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com")
 STRIPE_SECRET_KEY         = os.environ.get("STRIPE_SECRET_KEY", "")
 IS_DEV                    = os.environ.get("IS_DEV", "false").lower() == "true"
 
@@ -100,6 +103,14 @@ if "report_mode" not in st.session_state:
     st.session_state.report_mode = "swimmer"
 
 def show_landing_page():
+    if POSTHOG_PUBLIC_KEY:
+        st.markdown(f"""
+    <script>
+    !function(t,e){{var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){{function g(t,e){{var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){{t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){{var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e}},u.people.toString=function(){{return u.toString(1)+".people (stub)"}},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])}},e.__SV=1)}}(document,window.posthog||[]);
+    posthog.init('{POSTHOG_PUBLIC_KEY}', {{api_host:'{POSTHOG_HOST}', person_profiles:'identified_only'}});
+    </script>
+    """, unsafe_allow_html=True)
+
     # --- 1. Header ---
     st.markdown("""
     <div style="padding: 20px 0; display: flex; justify-content: center; align-items: center; position: relative; z-index: 1;">
@@ -130,6 +141,18 @@ def show_landing_page():
     </h1>
     <p style="color: #94a3b8; font-size: 1.05rem; max-width: 640px; margin: 0 auto; line-height: 1.5;">
         Frame-by-frame biomechanics analysis from a single side-view clip. Built by a 4 x 70.3 + 1 x 140.6 Ironman finisher who got tired of guessing.
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown("""
+<div style="max-width: 720px; margin: 0 auto 30px; padding: 18px 24px; background: linear-gradient(135deg, rgba(34, 211, 238, 0.12), rgba(16, 185, 129, 0.08)); border: 1px solid rgba(34, 211, 238, 0.4); border-radius: 16px; position: relative; z-index: 1; text-align: center;">
+    <div style="display: inline-block; background: #22d3ee; color: #0a1628; font-size: 0.7rem; font-weight: 800; letter-spacing: 1.5px; padding: 4px 12px; border-radius: 12px; margin-bottom: 10px;">LAUNCH SPECIAL</div>
+    <p style="color: white; font-size: 1.05rem; margin: 0 0 4px; font-weight: 600;">
+        <span style="color: #10b981; font-weight: 800;">$0.99</span> per analysis <span style="color: #94a3b8; text-decoration: line-through; font-weight: 400; font-size: 0.95rem;">$4.99</span> · through May 31
+    </p>
+    <p style="color: #94a3b8; font-size: 0.85rem; margin: 0;">
+        We're collecting real-world feedback before going public. Help us tune the model and get a full report at near-cost.
     </p>
 </div>
 """, unsafe_allow_html=True)
@@ -360,61 +383,105 @@ def show_landing_page():
 
     # --- Pricing & CTA ---
     st.markdown("""
-    <style>
-    .pricing-grid { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; position: relative; z-index: 1; margin-bottom: 20px; }
-    .pricing-card { flex: 1; min-width: 260px; max-width: 360px; background: rgba(15, 40, 71, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(6, 182, 212, 0.2); border-radius: 24px; padding: 32px 28px; text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.4); }
-    .pricing-card.coach { border-color: rgba(6, 182, 212, 0.5); position: relative; }
-    .badge { position: absolute; top: -14px; left: 50%; transform: translateX(-50%); background: #06b6d4; color: #0a1628; font-size: 0.75rem; font-weight: 800; padding: 4px 16px; border-radius: 20px; letter-spacing: 1px; }
-    .price-label { font-size: 0.8rem; color: #22d3ee; font-weight: 700; letter-spacing: 1px; margin-bottom: 6px; }
-    .price { font-size: 3rem; font-weight: 800; color: white; margin: 0 0 4px; }
-    .price-sub { font-size: 0.85rem; color: #64748b; margin-bottom: 16px; }
-    .feature-list { list-style: none; padding: 0; margin: 0 0 24px; text-align: left; }
-    .feature-list li { color: #94a3b8; font-size: 0.88rem; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
-    .feature-list li::before { content: "✓ "; color: #22d3ee; font-weight: 700; }
-    @media (max-width: 600px) { .pricing-grid { flex-direction: column; align-items: center; } }
-    </style>
-    <div class="pricing-grid">
-        <div class="pricing-card">
-            <div class="price-label">SWIMMER REPORT</div>
-            <div class="price">$4.99</div>
-            <div class="price-sub">/ video</div>
-            <ul class="feature-list">
-                <li>Overall technique score</li>
-                <li>Top 3 issues in plain English</li>
-                <li>Personalized drill cards</li>
-                <li>Annotated video</li>
-                <li>PDF report</li>
-            </ul>
+<style>
+.pricing-grid { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; position: relative; z-index: 1; margin-bottom: 20px; }
+.pricing-card { flex: 1; min-width: 260px; max-width: 360px; background: rgba(15, 40, 71, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(6, 182, 212, 0.2); border-radius: 24px; padding: 32px 28px; text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.4); position: relative; }
+.pricing-card.coach { border-color: rgba(6, 182, 212, 0.5); }
+.pricing-card.founding { border-color: rgba(16, 185, 129, 0.5); }
+.badge { position: absolute; top: -14px; left: 50%; transform: translateX(-50%); background: #06b6d4; color: #0a1628; font-size: 0.75rem; font-weight: 800; padding: 4px 16px; border-radius: 20px; letter-spacing: 1px; white-space: nowrap; }
+.badge.green { background: #10b981; color: #0a1628; }
+.price-label { font-size: 0.8rem; color: #22d3ee; font-weight: 700; letter-spacing: 1px; margin-bottom: 6px; }
+.price-row { display: flex; justify-content: center; align-items: baseline; gap: 10px; margin: 0 0 4px; }
+.price { font-size: 3rem; font-weight: 800; color: white; margin: 0; }
+.price-was { font-size: 1.25rem; color: #64748b; text-decoration: line-through; font-weight: 600; }
+.price-sub { font-size: 0.85rem; color: #64748b; margin-bottom: 16px; }
+.feature-list { list-style: none; padding: 0; margin: 0 0 24px; text-align: left; }
+.feature-list li { color: #94a3b8; font-size: 0.88rem; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+.feature-list li::before { content: "✓ "; color: #22d3ee; font-weight: 700; }
+@media (max-width: 600px) { .pricing-grid { flex-direction: column; align-items: center; } }
+</style>
+<div class="pricing-grid">
+    <div class="pricing-card founding">
+        <div class="badge green">LAUNCH PRICE</div>
+        <div class="price-label">SWIMMER REPORT</div>
+        <div class="price-row">
+            <div class="price">$0.99</div>
+            <div class="price-was">$4.99</div>
         </div>
-        <div class="pricing-card coach">
-            <div class="badge">MOST DATA</div>
-            <div class="price-label">COACH REPORT</div>
-            <div class="price">$6.99</div>
-            <div class="price-sub">/ video</div>
-            <ul class="feature-list">
-                <li>Everything in Swimmer PLUS:</li>
-                <li>Full metrics with thresholds &amp; zones</li>
-                <li>Component sub-scores</li>
-                <li>CSV frame data export</li>
-                <li>Analysis charts</li>
-                <li>Detailed technique panel in video</li>
-            </ul>
-        </div>
+        <div class="price-sub">/ video · launch price</div>
+        <ul class="feature-list">
+            <li>Overall technique score</li>
+            <li>Top 3 issues in plain English</li>
+            <li>Personalized drill cards</li>
+            <li>Annotated video</li>
+            <li>PDF report</li>
+        </ul>
     </div>
-    """, unsafe_allow_html=True)
+    <div class="pricing-card coach">
+        <div class="badge">MOST DATA</div>
+        <div class="price-label">COACH REPORT</div>
+        <div class="price-row">
+            <div class="price">$6.99</div>
+        </div>
+        <div class="price-sub">/ video</div>
+        <ul class="feature-list">
+            <li>Everything in Swimmer PLUS:</li>
+            <li>Full metrics with thresholds &amp; zones</li>
+            <li>Component sub-scores</li>
+            <li>CSV frame data export</li>
+            <li>Analysis charts</li>
+            <li>Detailed technique panel in video</li>
+        </ul>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
-    col_sw, col_co = st.columns(2)
-    with col_sw:
-        if STRIPE_PAYMENT_LINK:
-            track("checkout_button_rendered", {"tier": "swimmer"})
-            st.link_button("🏊 Get Swimmer Report →", STRIPE_PAYMENT_LINK, type="primary", use_container_width=True)
-        else:
+    def _add_utm(url: str, content: str) -> str:
+        if not url:
+            return url
+        sep = "&" if "?" in url else "?"
+        return f"{url}{sep}utm_source=swimformai&utm_medium=landing&utm_campaign=launch&utm_content={content}"
+
+    swimmer_link = STRIPE_PAYMENT_LINK_FOUNDING if STRIPE_PAYMENT_LINK_FOUNDING else STRIPE_PAYMENT_LINK
+    swimmer_price_label = "0.99_launch" if STRIPE_PAYMENT_LINK_FOUNDING else "4.99"
+    swimmer_link_with_utm = _add_utm(swimmer_link, "swimmer_launch")
+    coach_link_with_utm = _add_utm(STRIPE_PAYMENT_LINK_COACH, "coach")
+
+    # Fire rendered events ONCE per session, not on every rerun
+    if swimmer_link and "rendered_swimmer" not in st.session_state:
+        track("checkout_button_rendered", {"tier": "swimmer", "price": swimmer_price_label})
+        st.session_state.rendered_swimmer = True
+    if STRIPE_PAYMENT_LINK_COACH and "rendered_coach" not in st.session_state:
+        track("checkout_button_rendered", {"tier": "coach", "price": "6.99"})
+        st.session_state.rendered_coach = True
+
+    # Render the buttons as styled anchor tags so we can fire a click event
+    buttons_html = f"""
+<style>
+.cta-row {{ display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; margin: 12px 0 24px; position: relative; z-index: 1; }}
+.cta-btn {{
+    flex: 1; min-width: 240px; max-width: 360px;
+    padding: 14px 20px; border-radius: 12px; text-align: center;
+    font-family: 'Inter', sans-serif; font-weight: 700; font-size: 1rem;
+    text-decoration: none; cursor: pointer; transition: transform 0.15s ease, box-shadow 0.15s ease;
+    border: 1px solid transparent;
+}}
+.cta-btn.primary {{ background: linear-gradient(135deg, #06b6d4, #0891b2); color: white; box-shadow: 0 8px 16px rgba(6, 182, 212, 0.3); }}
+.cta-btn.secondary {{ background: rgba(15, 40, 71, 0.6); color: #22d3ee; border-color: rgba(34, 211, 238, 0.4); }}
+.cta-btn:hover {{ transform: translateY(-2px); box-shadow: 0 12px 20px rgba(6, 182, 212, 0.4); }}
+</style>
+<div class="cta-row">
+    <a class="cta-btn primary" href="{swimmer_link_with_utm}" onclick="if(window.posthog){{posthog.capture('checkout_clicked',{{tier:'swimmer',price:'{swimmer_price_label}'}});}}">🏊 Get Swimmer Report — $0.99 →</a>
+    <a class="cta-btn secondary" href="{coach_link_with_utm}" onclick="if(window.posthog){{posthog.capture('checkout_clicked',{{tier:'coach',price:'6.99'}});}}">📊 Get Coach Report →</a>
+</div>
+"""
+
+    if swimmer_link and STRIPE_PAYMENT_LINK_COACH:
+        st.markdown(buttons_html, unsafe_allow_html=True)
+    else:
+        if not swimmer_link:
             st.info("Swimmer payment link not configured.")
-    with col_co:
-        if STRIPE_PAYMENT_LINK_COACH:
-            track("checkout_button_rendered", {"tier": "coach"})
-            st.link_button("📊 Get Coach Report →", STRIPE_PAYMENT_LINK_COACH, use_container_width=True)
-        else:
+        if not STRIPE_PAYMENT_LINK_COACH:
             st.info("Coach payment link not configured.")
 
     if IS_DEV:
