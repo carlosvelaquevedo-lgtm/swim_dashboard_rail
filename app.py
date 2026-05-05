@@ -11,38 +11,25 @@ from analytics import track
 load_dotenv()
 
 
-def _checkout_click_handler_attr(
-    posthog_public_key: str,
-    posthog_host: str,
-    tier: str,
-    price: str,
-    destination: str = "stripe",
-) -> str:
-    """HTML onclick attribute: non-blocking PostHog capture then default link navigation."""
-    host = (posthog_host or "https://us.i.posthog.com").rstrip("/")
-    capture_url = f"{host}/capture/"
-    tier_js = json.dumps(tier)
-    price_js = json.dumps(price)
-    dest_js = json.dumps(destination)
-    pk_js = json.dumps(posthog_public_key or "")
-    url_js = json.dumps(capture_url)
-    js = (
-        "(function(){"
-        f"var tier={tier_js};var price={price_js};var dest={dest_js};var pk={pk_js};var url={url_js};"
-        'var props={tier:tier,price:price,destination:dest,$lib:"streamlit-sendbeacon"};'
-        "var did=(window.posthog&&posthog.get_distinct_id&&posthog.get_distinct_id())||"
-        '(function(){var id=sessionStorage.getItem("ph_distinct_id");if(!id){'
-        'id=(self.crypto&&crypto.randomUUID)?crypto.randomUUID():String(Date.now());'
-        'sessionStorage.setItem("ph_distinct_id",id);}return id;})();'
-        "if(pk&&navigator.sendBeacon){"
-        'try{var body=JSON.stringify({api_key:pk,event:"checkout_clicked",properties:props,distinct_id:did});'
-        'navigator.sendBeacon(url,new Blob([body],{type:"application/json"}));}'
-        "catch(e){}}"
-        "if(window.posthog&&posthog.capture){"
-        'try{posthog.capture("checkout_clicked",props);}catch(e){}}'
-        "})();"
+def _add_utm(url: str, content: str) -> str:
+    if not url:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}utm_source=swimformai&utm_medium=landing&utm_campaign=launch&utm_content={content}"
+
+
+def _redirect_to_external(url: str, message: str = "Redirecting to secure checkout…") -> None:
+    if not url:
+        return
+    url_js = json.dumps(url)
+    st.markdown(
+        f"""<div style="color:#94a3b8;text-align:center;padding:24px;">{html_escape(message)}</div>
+<meta http-equiv="refresh" content="0;url={html_escape(url, quote=True)}" />
+<script>window.top.location.href = {url_js};</script>
+<p style="text-align:center;"><a href="{html_escape(url, quote=True)}" style="color:#22d3ee;">Continue to checkout</a></p>
+""",
+        unsafe_allow_html=True,
     )
-    return f'onclick="{html_escape(js, quote=True)}"'
 
 # =============================================
 # PAGE CONFIG
@@ -472,16 +459,8 @@ def show_landing_page():
 </div>
 """, unsafe_allow_html=True)
 
-    def _add_utm(url: str, content: str) -> str:
-        if not url:
-            return url
-        sep = "&" if "?" in url else "?"
-        return f"{url}{sep}utm_source=swimformai&utm_medium=landing&utm_campaign=launch&utm_content={content}"
-
     swimmer_link = STRIPE_PAYMENT_LINK_FOUNDING if STRIPE_PAYMENT_LINK_FOUNDING else STRIPE_PAYMENT_LINK
     swimmer_price_label = "0.99_launch" if STRIPE_PAYMENT_LINK_FOUNDING else "4.99"
-    swimmer_link_with_utm = _add_utm(swimmer_link, "swimmer_launch")
-    coach_link_with_utm = _add_utm(STRIPE_PAYMENT_LINK_COACH, "coach")
 
     # Fire rendered events ONCE per session, not on every rerun
     if swimmer_link and "rendered_swimmer" not in st.session_state:
@@ -492,20 +471,6 @@ def show_landing_page():
         st.session_state.rendered_coach = True
 
     if swimmer_link and STRIPE_PAYMENT_LINK_COACH:
-        swimmer_onclick = _checkout_click_handler_attr(
-            POSTHOG_PUBLIC_KEY,
-            POSTHOG_HOST,
-            tier="swimmer",
-            price=swimmer_price_label,
-            destination="stripe",
-        )
-        coach_onclick = _checkout_click_handler_attr(
-            POSTHOG_PUBLIC_KEY,
-            POSTHOG_HOST,
-            tier="coach",
-            price="6.99",
-            destination="stripe",
-        )
         buttons_html = f"""
 <style>
 .cta-row {{ display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; margin: 12px 0 24px; position: relative; z-index: 1; }}
@@ -521,8 +486,8 @@ def show_landing_page():
 .cta-btn:hover {{ transform: translateY(-2px); box-shadow: 0 12px 20px rgba(6, 182, 212, 0.4); }}
 </style>
 <div class="cta-row">
-    <a class="cta-btn primary" href="{swimmer_link_with_utm}" {swimmer_onclick}>🏊 Get Swimmer Report — $0.99 →</a>
-    <a class="cta-btn secondary" href="{coach_link_with_utm}" {coach_onclick}>📊 Get Coach Report →</a>
+    <a class="cta-btn primary" href="?checkout=swimmer">🏊 Get Swimmer Report — $0.99 →</a>
+    <a class="cta-btn secondary" href="?checkout=coach">📊 Get Coach Report →</a>
 </div>
 """
         st.markdown(buttons_html, unsafe_allow_html=True)
@@ -586,6 +551,35 @@ if valid_tokens and q.get("admin") in valid_tokens:
     st.query_params.clear()
     st.query_params["verified"] = "admin"
     st.rerun()
+
+# Server-side checkout click-through: POST lands here, we track then redirect to Stripe
+checkout_tier = str(q.get("checkout", "") or "").strip().lower()
+if checkout_tier in ("swimmer", "coach"):
+    swimmer_base = STRIPE_PAYMENT_LINK_FOUNDING if STRIPE_PAYMENT_LINK_FOUNDING else STRIPE_PAYMENT_LINK
+    swimmer_price = "0.99_launch" if STRIPE_PAYMENT_LINK_FOUNDING else "4.99"
+    if checkout_tier == "swimmer":
+        if not swimmer_base:
+            st.error("Swimmer payment link not configured.")
+            st.query_params.clear()
+            st.stop()
+        dest = _add_utm(swimmer_base, "swimmer_launch")
+        track(
+            "checkout_clicked",
+            {"tier": "swimmer", "price": swimmer_price, "destination": "stripe"},
+        )
+    else:
+        if not STRIPE_PAYMENT_LINK_COACH:
+            st.error("Coach payment link not configured.")
+            st.query_params.clear()
+            st.stop()
+        dest = _add_utm(STRIPE_PAYMENT_LINK_COACH, "coach")
+        track(
+            "checkout_clicked",
+            {"tier": "coach", "price": "6.99", "destination": "stripe"},
+        )
+    st.query_params.clear()
+    _redirect_to_external(dest)
+    st.stop()
 
 if "session_id" in q and not st.session_state.paid:
     session_id = q.get("session_id")
