@@ -129,7 +129,7 @@ def show_landing_page():
         Find your 3 biggest freestyle <span style="color: #22d3ee;">speed leaks</span> in 90 seconds.
     </h1>
     <p style="color: #94a3b8; font-size: 1.05rem; max-width: 640px; margin: 0 auto; line-height: 1.5;">
-        Frame-by-frame biomechanics analysis from a single side-view clip. Built by a 4x 70.3 + Ironman finisher who got tired of guessing.
+        Frame-by-frame biomechanics analysis from a single side-view clip. Built by a 4 x 70.3 + 1 x 140.6 Ironman finisher who got tired of guessing.
     </p>
 </div>
 """, unsafe_allow_html=True)
@@ -337,7 +337,7 @@ def show_landing_page():
 <div style="max-width: 720px; margin: 50px auto 30px; padding: 32px; background: rgba(15, 40, 71, 0.4); border: 1px solid rgba(34, 211, 238, 0.15); border-radius: 20px; position: relative; z-index: 1;">
     <p style="color: #22d3ee; font-size: 0.8rem; font-weight: 700; letter-spacing: 1.5px; margin: 0 0 16px; text-align: center;">WHY I BUILT THIS</p>
     <p style="color: #cbd5e1; font-size: 0.98rem; line-height: 1.6; margin: 0 0 24px; text-align: center;">
-        I'm Carlos — 4x 70.3 and Ironman finisher based in Houston. I got tired of training more without swimming faster. Built SwimForm AI to find what I couldn't see at full speed. Same race, two years apart:
+        I'm Carlos — 4 x 70.3 and 1 x 140.6 Ironman finisher based in Houston. I got tired of training more without swimming faster. Built SwimForm AI to find what I couldn't see at full speed. Same race, two years apart:
     </p>
     <div style="display: flex; justify-content: center; align-items: center; gap: 24px; flex-wrap: wrap; margin: 0 auto;">
         <div style="text-align: center; min-width: 130px;">
