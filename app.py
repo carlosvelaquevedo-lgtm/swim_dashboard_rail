@@ -3,6 +3,7 @@ import streamlit.components.v1 as components
 import base64
 import json
 import os
+from html import escape as html_escape
 
 from dotenv import load_dotenv
 from analytics import track
@@ -10,16 +11,38 @@ from analytics import track
 load_dotenv()
 
 
-def _redirect_top_level(url: str) -> None:
-    """Send the browser to an external URL (breaks out of Streamlit iframes)."""
-    if not url:
-        return
-    js_url = json.dumps(url)
-    components.html(
-        f"<script>window.top.location.href = {js_url};</script>",
-        height=0,
-        width=0,
+def _checkout_click_handler_attr(
+    posthog_public_key: str,
+    posthog_host: str,
+    tier: str,
+    price: str,
+    destination: str = "stripe",
+) -> str:
+    """HTML onclick attribute: non-blocking PostHog capture then default link navigation."""
+    host = (posthog_host or "https://us.i.posthog.com").rstrip("/")
+    capture_url = f"{host}/capture/"
+    tier_js = json.dumps(tier)
+    price_js = json.dumps(price)
+    dest_js = json.dumps(destination)
+    pk_js = json.dumps(posthog_public_key or "")
+    url_js = json.dumps(capture_url)
+    js = (
+        "(function(){"
+        f"var tier={tier_js};var price={price_js};var dest={dest_js};var pk={pk_js};var url={url_js};"
+        'var props={tier:tier,price:price,destination:dest,$lib:"streamlit-sendbeacon"};'
+        "var did=(window.posthog&&posthog.get_distinct_id&&posthog.get_distinct_id())||"
+        '(function(){var id=sessionStorage.getItem("ph_distinct_id");if(!id){'
+        'id=(self.crypto&&crypto.randomUUID)?crypto.randomUUID():String(Date.now());'
+        'sessionStorage.setItem("ph_distinct_id",id);}return id;})();'
+        "if(pk&&navigator.sendBeacon){"
+        'try{var body=JSON.stringify({api_key:pk,event:"checkout_clicked",properties:props,distinct_id:did});'
+        'navigator.sendBeacon(url,new Blob([body],{type:"application/json"}));}'
+        "catch(e){}}"
+        "if(window.posthog&&posthog.capture){"
+        'try{posthog.capture("checkout_clicked",props);}catch(e){}}'
+        "})();"
     )
+    return f'onclick="{html_escape(js, quote=True)}"'
 
 # =============================================
 # PAGE CONFIG
@@ -469,80 +492,40 @@ def show_landing_page():
         st.session_state.rendered_coach = True
 
     if swimmer_link and STRIPE_PAYMENT_LINK_COACH:
-        pending_checkout = st.session_state.pop("checkout_redirect_url", None)
-        if pending_checkout:
-            _redirect_top_level(pending_checkout)
-            st.stop()
-
-        st.markdown(
-            """
-<style>
-.checkout-cta-area { margin: 12px 0 24px; position: relative; z-index: 1; }
-.checkout-cta-area div[data-testid="column"] { min-width: 240px; }
-.checkout-cta-area button {
-    border-radius: 12px !important;
-    font-weight: 700 !important;
-    font-size: 1rem !important;
-    padding: 14px 20px !important;
-    min-height: 52px;
-    transition: transform 0.15s ease, box-shadow 0.15s ease !important;
-}
-.checkout-cta-area button[kind="primary"] {
-    background: linear-gradient(135deg, #06b6d4, #0891b2) !important;
-    border: 1px solid transparent !important;
-    color: white !important;
-    box-shadow: 0 8px 16px rgba(6, 182, 212, 0.3) !important;
-}
-.checkout-cta-area button[kind="secondary"] {
-    background: rgba(15, 40, 71, 0.6) !important;
-    border: 1px solid rgba(34, 211, 238, 0.4) !important;
-    color: #22d3ee !important;
-}
-.checkout-cta-area button:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 12px 20px rgba(6, 182, 212, 0.4) !important;
-}
-</style>
-<div class="checkout-cta-area"></div>
-""",
-            unsafe_allow_html=True,
+        swimmer_onclick = _checkout_click_handler_attr(
+            POSTHOG_PUBLIC_KEY,
+            POSTHOG_HOST,
+            tier="swimmer",
+            price=swimmer_price_label,
+            destination="stripe",
         )
-
-        col_swimmer, col_coach = st.columns(2, gap="medium")
-        with col_swimmer:
-            if st.button(
-                "🏊 Get Swimmer Report — $0.99 →",
-                type="primary",
-                use_container_width=True,
-                key="checkout_swimmer_cta",
-            ):
-                track(
-                    "checkout_clicked",
-                    {
-                        "tier": "swimmer",
-                        "price": swimmer_price_label,
-                        "destination": "stripe",
-                    },
-                )
-                st.session_state.checkout_redirect_url = swimmer_link_with_utm
-                st.rerun()
-        with col_coach:
-            if st.button(
-                "📊 Get Coach Report →",
-                type="secondary",
-                use_container_width=True,
-                key="checkout_coach_cta",
-            ):
-                track(
-                    "checkout_clicked",
-                    {
-                        "tier": "coach",
-                        "price": "6.99",
-                        "destination": "stripe",
-                    },
-                )
-                st.session_state.checkout_redirect_url = coach_link_with_utm
-                st.rerun()
+        coach_onclick = _checkout_click_handler_attr(
+            POSTHOG_PUBLIC_KEY,
+            POSTHOG_HOST,
+            tier="coach",
+            price="6.99",
+            destination="stripe",
+        )
+        buttons_html = f"""
+<style>
+.cta-row {{ display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; margin: 12px 0 24px; position: relative; z-index: 1; }}
+.cta-btn {{
+    flex: 1; min-width: 240px; max-width: 360px;
+    padding: 14px 20px; border-radius: 12px; text-align: center;
+    font-family: 'Inter', sans-serif; font-weight: 700; font-size: 1rem;
+    text-decoration: none; cursor: pointer; transition: transform 0.15s ease, box-shadow 0.15s ease;
+    border: 1px solid transparent; display: inline-block; box-sizing: border-box;
+}}
+.cta-btn.primary {{ background: linear-gradient(135deg, #06b6d4, #0891b2); color: white; box-shadow: 0 8px 16px rgba(6, 182, 212, 0.3); }}
+.cta-btn.secondary {{ background: rgba(15, 40, 71, 0.6); color: #22d3ee; border-color: rgba(34, 211, 238, 0.4); }}
+.cta-btn:hover {{ transform: translateY(-2px); box-shadow: 0 12px 20px rgba(6, 182, 212, 0.4); }}
+</style>
+<div class="cta-row">
+    <a class="cta-btn primary" href="{swimmer_link_with_utm}" {swimmer_onclick}>🏊 Get Swimmer Report — $0.99 →</a>
+    <a class="cta-btn secondary" href="{coach_link_with_utm}" {coach_onclick}>📊 Get Coach Report →</a>
+</div>
+"""
+        st.markdown(buttons_html, unsafe_allow_html=True)
     else:
         if not swimmer_link:
             st.info("Swimmer payment link not configured.")
