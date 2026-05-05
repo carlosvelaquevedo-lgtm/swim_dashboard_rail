@@ -35,6 +35,11 @@ def track(event_name: str, properties: dict = None):
             event=event_name,
             properties=properties or {},
         )
+        # Ensure events are sent before redirects (e.g. Streamlit checkout → Stripe)
+        try:
+            client.flush()
+        except Exception:
+            pass
     except Exception as e:
         logging.debug(f"PostHog tracking error: {e}")
         pass  # never let analytics break the app
