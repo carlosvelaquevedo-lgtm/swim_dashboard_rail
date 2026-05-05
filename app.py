@@ -172,7 +172,7 @@ def show_landing_page():
 <div style="max-width: 720px; margin: 0 auto 30px; padding: 18px 24px; background: linear-gradient(135deg, rgba(34, 211, 238, 0.12), rgba(16, 185, 129, 0.08)); border: 1px solid rgba(34, 211, 238, 0.4); border-radius: 16px; position: relative; z-index: 1; text-align: center;">
     <div style="display: inline-block; background: #22d3ee; color: #0a1628; font-size: 0.7rem; font-weight: 800; letter-spacing: 1.5px; padding: 4px 12px; border-radius: 12px; margin-bottom: 10px;">LAUNCH SPECIAL</div>
     <p style="color: white; font-size: 1.05rem; margin: 0 0 4px; font-weight: 600;">
-        <span style="color: #10b981; font-weight: 800;">$0.99</span> per analysis <span style="color: #94a3b8; text-decoration: line-through; font-weight: 400; font-size: 0.95rem;">$4.99</span> · through May 31
+        <span style="color: #10b981; font-weight: 800;">$0.99</span> per analysis <span style="color: #94a3b8; text-decoration: line-through; font-weight: 400; font-size: 0.95rem;">$4.99</span> ·
     </p>
     <p style="color: #94a3b8; font-size: 0.85rem; margin: 0;">
         We're collecting real-world feedback before going public. Help us tune the model and get a full report at near-cost.
