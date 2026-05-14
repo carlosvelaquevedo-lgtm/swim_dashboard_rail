@@ -2443,44 +2443,17 @@ class SwimAnalyzer:
         score = sum(s * w for s, w in components) / total_weight if total_weight > 0 else 0
         score = max(0, min(100, score))
 
-        # Prepare metrics dict for panel
-        metrics_dict = {
-            'horizontal_deviation': horizontal_dev,
-            'evf_plane_angle': evf_angle,
-            'torso_lean': torso,
-            'body_roll': roll_abs,
-            'kick_depth': kick_depth,
-            'kick_symmetry': kick_sym,
-            'score': score,
-            'is_gliding': is_gliding,
-            'glide_score': glide_score
-        }
-
-        # Draw overlay based on report_mode
-        if self.report_mode == "coach":
-            # Full technique panels for coach
-            draw_technique_panel_enhanced(frame, w-180, "YOUR STROKE", metrics_dict, phase, False)
-            ideal_metrics = {
-                'horizontal_deviation': 3.0,
-                'evf_plane_angle': 15.0,
-                'torso_lean': 8.0,
-                'body_roll': 45.0,
-                'kick_depth': 0.25,
-                'kick_symmetry': 5.0,
-                'score': 95,
-                'is_gliding': True,
-                'glide_score': 90
-            }
-            draw_technique_panel_enhanced(frame, 180, "IDEAL REFERENCE", ideal_metrics, "Pull", True)
-        else:
-            # Swimmer mode: score badge + phase label only (skeleton drawn elsewhere)
-            score_color = (0, 200, 0) if score >= 70 else (0, 200, 220) if score >= 50 else (0, 0, 230)
-            cv2.rectangle(frame, (10, 10), (190, 65), (0, 0, 0), -1)
-            cv2.rectangle(frame, (10, 10), (190, 65), score_color, 2)
-            cv2.putText(frame, f"Score: {score:.0f}/100", (18, 38),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, score_color, 2)
-            cv2.putText(frame, phase, (18, 58),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+        # Per coach feedback (Stephanie Peterson, R3 Endurance) — coach video now
+        # matches the simpler swimmer view. Detailed metrics live in the PDF report,
+        # not in the video. The video is for showing the swimmer the LINES,
+        # not for displaying numbers.
+        score_color = (0, 200, 0) if score >= 70 else (0, 200, 220) if score >= 50 else (0, 0, 230)
+        cv2.rectangle(frame, (10, 10), (190, 65), (0, 0, 0), -1)
+        cv2.rectangle(frame, (10, 10), (190, 65), score_color, 2)
+        cv2.putText(frame, f"Score: {score:.0f}/100", (18, 38),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, score_color, 2)
+        cv2.putText(frame, phase, (18, 58),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
         # Track best/worst frames during Pull phase
         if phase == "Pull":
@@ -2915,6 +2888,12 @@ def generate_swimmer_pdf(summary, filename: str) -> io.BytesIO:
                               spaceAfter=12, leftIndent=20))
     styles.add(ParagraphStyle(name='Footer', fontSize=8, textColor=colors.HexColor('#64748b'),
                               alignment=1))
+    styles.add(ParagraphStyle(name='GlossaryTerm', fontSize=10,
+                              textColor=colors.HexColor('#06b6d4'),
+                              spaceBefore=6, spaceAfter=2))
+    styles.add(ParagraphStyle(name='GlossaryDef', fontSize=9,
+                              textColor=colors.HexColor('#475569'),
+                              spaceAfter=4, leftIndent=10))
 
     story = []
     story.append(Paragraph("Your Swim Technique Report", styles['SwimTitle']))
@@ -2968,6 +2947,46 @@ def generate_swimmer_pdf(summary, filename: str) -> io.BytesIO:
             story.append(RLImage(img_buf, width=4*inch, height=2.5*inch))
         except Exception:
             pass
+
+    # Glossary — plain-English definitions per coach feedback (Steph, R3 Endurance):
+    # athletes often don't know terms like "catch", "EVF", "hip drop".
+    story.append(PageBreak())
+    story.append(Paragraph("Plain-English Glossary", styles['Heading2']))
+    story.append(Spacer(1, 0.1*inch))
+
+    glossary_items = [
+        ("Catch",
+         "The moment your hand enters the water and starts pulling. A good catch "
+         "happens with the elbow higher than the wrist — like reaching over a barrel."),
+        ("Early Vertical Forearm (EVF)",
+         "Right after the catch, your forearm should point straight down to the pool floor "
+         "while your elbow stays high. This is the strongest pulling position."),
+        ("Dropped Elbow",
+         "When your elbow sinks below your wrist during the pull. You lose power because "
+         "you're pushing water down instead of back."),
+        ("Hip Drop / Hip Sink",
+         "When your hips fall below the surface, your legs drag and you slow down. "
+         "Strong core + steady kick keeps hips up."),
+        ("Body Roll",
+         "Rotation along your long axis as you stroke. Around 45° each side is ideal — "
+         "it lengthens your reach and reduces shoulder strain."),
+        ("Horizontal Deviation",
+         "How much your shoulders, hips, and ankles wander off a straight line down the pool. "
+         "Less wobble = less drag."),
+        ("Kick Depth",
+         "How far your foot drops below the surface on each kick. Deeper isn't better — "
+         "small, fast kicks from the hip beat big knee-bent kicks."),
+        ("Glide",
+         "The moment between strokes where you're still moving forward with no effort. "
+         "Long glides = efficient stroke."),
+        ("Pull Phase",
+         "The part of the stroke where your hand is moving from out front, under your body, "
+         "to your hip. This is where most of your propulsion comes from."),
+    ]
+
+    for term, definition in glossary_items:
+        story.append(Paragraph(f"<b>{term}</b>", styles['GlossaryTerm']))
+        story.append(Paragraph(definition, styles['GlossaryDef']))
 
     story.append(Spacer(1, 0.3*inch))
     story.append(Paragraph(
