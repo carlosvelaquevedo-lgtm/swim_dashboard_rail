@@ -2357,10 +2357,8 @@ class SwimAnalyzer:
             if is_dropped_elbow:
                 self.dropped_elbow_frames += 1
 
-        # Draw landmarks
-        for lm in landmarks:
-            x, y = int(lm.x * w), int(lm.y * h)
-            cv2.circle(frame, (x, y), 3, (0, 255, 128), -1)
+        # Landmark dots removed per coach feedback (Stephanie Peterson, R3 Endurance).
+        # Skeleton lines drawn by draw_overlay_zones() are clearer for coach review.
 
         # NEW: Draw color-coded overlay zones
         draw_overlay_zones(frame, lm_pixel, horizontal_dev, evf_angle, phase)
@@ -3842,8 +3840,11 @@ def main():
 
             # --- OUTPUT VIDEO SETUP (PyAV preferred, OpenCV+FFmpeg fallback) ---
             out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+            slowmo_out_path = tempfile.NamedTemporaryFile(delete=False, suffix="_slowmo.mp4").name
             temp_raw_path = None  # Only used in fallback path
             use_pyav = PYAV_AVAILABLE
+            slowmo_container = None
+            slowmo_stream = None
 
             if use_pyav:
                 # PyAV: write H.264 MP4 directly, frame by frame — no intermediate AVI
@@ -3853,6 +3854,17 @@ def main():
                 av_stream.height = h
                 av_stream.pix_fmt = 'yuv420p'
                 av_stream.options = {
+                    'preset': 'fast',
+                    'crf': '23',
+                    'movflags': '+faststart',
+                }
+                # Slow-mo (0.5x) — coach feedback: full speed is too fast to follow lines
+                slowmo_container = av.open(slowmo_out_path, mode='w')
+                slowmo_stream = slowmo_container.add_stream('libx264', rate=max(int(fps / 2), 1))
+                slowmo_stream.width = w
+                slowmo_stream.height = h
+                slowmo_stream.pix_fmt = 'yuv420p'
+                slowmo_stream.options = {
                     'preset': 'fast',
                     'crf': '23',
                     'movflags': '+faststart',
@@ -3881,6 +3893,9 @@ def main():
                     av_frame = av.VideoFrame.from_ndarray(annotated, format='bgr24')
                     for packet in av_stream.encode(av_frame):
                         av_container.mux(packet)
+                    slowmo_frame = av.VideoFrame.from_ndarray(annotated, format='bgr24')
+                    for packet in slowmo_stream.encode(slowmo_frame):
+                        slowmo_container.mux(packet)
                 else:
                     writer.write(annotated)
 
@@ -3896,6 +3911,9 @@ def main():
                 for packet in av_stream.encode():
                     av_container.mux(packet)
                 av_container.close()
+                for packet in slowmo_stream.encode():
+                    slowmo_container.mux(packet)
+                slowmo_container.close()
                 processing_status.text("✅ Analysis complete!")
             else:
                 writer.release()
@@ -3941,6 +3959,10 @@ def main():
             # READ VIDEO BYTES BEFORE DELETING FILES
             with open(out_path, 'rb') as f:
                 video_bytes = f.read()
+            slowmo_bytes = None
+            if use_pyav and os.path.exists(slowmo_out_path):
+                with open(slowmo_out_path, 'rb') as f:
+                    slowmo_bytes = f.read()
 
             # PROCESS RESULTS (before cleanup)
             summary = analyzer.get_summary()
@@ -3957,6 +3979,8 @@ def main():
             if report_mode == "coach":
                 with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zipf:
                     zipf.writestr(f"annotated_video_{timestamp}.mp4", video_bytes)
+                    if slowmo_bytes:
+                        zipf.writestr(f"annotated_video_slowmo_{timestamp}.mp4", slowmo_bytes)
                     zipf.writestr(f"technique_report_{timestamp}.pdf", pdf_buf.getvalue())
                     zipf.writestr(f"frame_data_{timestamp}.csv", csv_buf.getvalue())
                 zip_buf.seek(0)
@@ -3966,6 +3990,7 @@ def main():
             st.session_state["analysis_results"] = {
                 "summary": summary,
                 "video_bytes": video_bytes,
+                "slowmo_bytes": slowmo_bytes,
                 "pdf_buf": pdf_buf,
                 "csv_buf": csv_buf,
                 "zip_buf": zip_buf,
@@ -3979,6 +4004,8 @@ def main():
             try:
                 os.unlink(input_path_original)
                 os.unlink(out_path)
+                if os.path.exists(slowmo_out_path):
+                    os.unlink(slowmo_out_path)
                 if temp_raw_path and os.path.exists(temp_raw_path):
                     os.unlink(temp_raw_path)
                 if converted_path and converted_path != input_path_original:
@@ -4265,6 +4292,18 @@ def main():
                         "⬇️ Download Annotated Video",
                         video_bytes,
                         f"annotated_swim_{timestamp}.mp4",
+                        "video/mp4"
+                    )
+                # Slow-mo: COACH ONLY (per CV) — not added to swimmer view
+                slowmo_bytes = st.session_state.get("analysis_results", {}).get("slowmo_bytes")
+                if slowmo_bytes:
+                    st.subheader("🐢 Slow-Motion Review (0.5x)")
+                    st.caption("Half-speed — easier to follow alignment lines and stroke phases.")
+                    st.video(slowmo_bytes, format="video/mp4")
+                    st.download_button(
+                        "🐢 Download Slow-Motion Video (0.5x)",
+                        slowmo_bytes,
+                        f"annotated_swim_slowmo_{timestamp}.mp4",
                         "video/mp4"
                     )
 
