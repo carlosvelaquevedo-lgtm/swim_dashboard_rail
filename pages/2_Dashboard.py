@@ -2373,7 +2373,7 @@ class SwimAnalyzer:
             alignment_score = 100 - ((horizontal_dev - DEFAULT_HORIZONTAL_DEV_GOOD[1]) / 
                                      (DEFAULT_HORIZONTAL_DEV_OK[1] - DEFAULT_HORIZONTAL_DEV_GOOD[1]) * 30)
         else:
-            alignment_score = max(0, 70 - (horizontal_dev - DEFAULT_HORIZONTAL_DEV_OK[1]) * 2)
+            alignment_score = max(0, 60 - (horizontal_dev - DEFAULT_HORIZONTAL_DEV_OK[1]) * 4)
 
         # EVF score (only during Pull/Push)
         if phase in ("Pull", "Push"):
@@ -2383,9 +2383,10 @@ class SwimAnalyzer:
                 evf_score = 100 - ((evf_angle - DEFAULT_EVF_ANGLE_GOOD[1]) / 
                                    (DEFAULT_EVF_ANGLE_OK[1] - DEFAULT_EVF_ANGLE_GOOD[1]) * 30)
             else:
-                evf_score = max(0, 70 - (evf_angle - DEFAULT_EVF_ANGLE_OK[1]))
+                evf_score = max(0, 60 - (evf_angle - DEFAULT_EVF_ANGLE_OK[1]) * 2)
         else:
-            evf_score = 100  # Don't penalize during recovery
+            # During Recovery/Entry, EVF isn't measurable — exclude from composite (see weighting below).
+            evf_score = None
 
         # Calculate overall score with new components
         # Weight distribution: Alignment 25%, EVF 25%, Roll 15%, Kick 15%, Torso 10%, Glide 10%
@@ -2396,16 +2397,16 @@ class SwimAnalyzer:
         elif DEFAULT_ROLL_OK[0] <= roll_abs <= DEFAULT_ROLL_OK[1]:
             roll_score = 80
         else:
-            roll_score = max(0, 60 - abs(roll_abs - 45))
+            roll_score = max(0, 50 - abs(roll_abs - 45) * 1.5)
 
         # Kick score
-        kick_sym_score = max(0, 100 - (kick_sym / DEFAULT_KICK_SYM_MAX_GOOD * 30))
+        kick_sym_score = max(0, 100 - (kick_sym / DEFAULT_KICK_SYM_MAX_GOOD * 50))
         if DEFAULT_KICK_DEPTH_GOOD[0] <= kick_depth <= DEFAULT_KICK_DEPTH_GOOD[1]:
             kick_depth_score = 100
         elif DEFAULT_KICK_DEPTH_OK[0] <= kick_depth <= DEFAULT_KICK_DEPTH_OK[1]:
             kick_depth_score = 80
         else:
-            kick_depth_score = 60
+            kick_depth_score = 30
         kick_score = (kick_sym_score + kick_depth_score) / 2
 
         # Torso score
@@ -2414,7 +2415,7 @@ class SwimAnalyzer:
         elif DEFAULT_TORSO_OK[0] <= abs(torso) <= DEFAULT_TORSO_OK[1]:
             torso_score = 80
         else:
-            torso_score = 60
+            torso_score = 30
 
         # NEW: Compute glide metrics - IMPROVED
         is_gliding, glide_score, arm_extension = compute_glide_metrics(
@@ -2425,29 +2426,21 @@ class SwimAnalyzer:
         if is_gliding:
             self.glide_frames += 1
 
-        # Weighted overall score (updated to include glide)
+        # Build component list dynamically, excluding non-applicable metrics
+        # so we don't gift free points for things we can't measure this frame.
+        components = [
+            (alignment_score, 0.25),
+            (roll_score, 0.15),
+            (kick_score, 0.15),
+            (torso_score, 0.10),
+        ]
+        if evf_score is not None:
+            components.append((evf_score, 0.25))
         if is_gliding:
-            # When gliding, include glide quality in the score
-            score = (
-                alignment_score * 0.18 +
-                evf_score * 0.18 +
-                roll_score * 0.15 +
-                kick_score * 0.15 +
-                torso_score * 0.10 +
-                glide_score * 0.14 +
-                100 * 0.10
-            )
-        else:
-            # When not gliding, redistribute glide weight to alignment and EVF
-            score = (
-                alignment_score * 0.25 +
-                evf_score * 0.25 +
-                roll_score * 0.15 +
-                kick_score * 0.15 +
-                torso_score * 0.10 +
-                100 * 0.10
-            )
+            components.append((glide_score, 0.10))
 
+        total_weight = sum(w for _, w in components)
+        score = sum(s * w for s, w in components) / total_weight if total_weight > 0 else 0
         score = max(0, min(100, score))
 
         # Prepare metrics dict for panel
@@ -2525,7 +2518,7 @@ class SwimAnalyzer:
             alignment_status=alignment_status,
             wrist_velocity_y=wrist_velocity_y,
             alignment_score=alignment_score,
-            evf_score=evf_score,
+            evf_score=evf_score if evf_score is not None else 100,
             breathing_during_pull=breathing_during_pull,
             is_gliding=is_gliding,
             glide_score=glide_score,
