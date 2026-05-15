@@ -2120,7 +2120,7 @@ class SwimAnalyzer:
             fps: Frames per second for velocity calculations
         """
         if self.landmarker is None:
-            return frame, None
+            return frame, frame, None
 
         # Ensure timestamp is strictly increasing
         if timestamp_ms <= self.last_timestamp_ms:
@@ -2140,7 +2140,7 @@ class SwimAnalyzer:
                 if self.context_detector.detection_complete:
                     self.video_context = self.context_detector.get_context()
                     self.available_metrics = get_metrics_for_context(self.video_context)
-            return frame, None
+            return frame, frame, None
 
         landmarks = result.pose_landmarks[0]
         h, w = frame.shape[:2]
@@ -2175,7 +2175,7 @@ class SwimAnalyzer:
         is_valid_pose, validation_reason = validate_pose(lm_pixel, frame, h, w)
         if not is_valid_pose:
             # Not a valid human pose - skip this frame
-            return frame, None
+            return frame, frame, None
         
         # Continue context detection with landmarks
         was_complete = self.context_detector.detection_complete
@@ -2188,7 +2188,7 @@ class SwimAnalyzer:
                 self.available_metrics = get_metrics_for_context(self.video_context)
         
         if conf < self.conf_thresh:
-            return frame, None
+            return frame, frame, None
 
         # Check for inverted video (upside-down footage)
         # CRITICAL FIX: Do NOT flip above-water footage!
@@ -2357,11 +2357,19 @@ class SwimAnalyzer:
             if is_dropped_elbow:
                 self.dropped_elbow_frames += 1
 
-        # Landmark dots removed per coach feedback (Stephanie Peterson, R3 Endurance).
-        # Skeleton lines drawn by draw_overlay_zones() are clearer for coach review.
+        # Snapshot frame BEFORE dots — used for slow-mo (clean lines only).
+        # Realtime video keeps the dots; slow-mo strips them per coach feedback
+        # (Stephanie Peterson, R3 Endurance).
+        frame_clean = frame.copy()
 
-        # NEW: Draw color-coded overlay zones
+        # Draw landmark dots on realtime frame only
+        for lm in landmarks:
+            x, y = int(lm.x * w), int(lm.y * h)
+            cv2.circle(frame, (x, y), 3, (0, 255, 128), -1)
+
+        # Draw color-coded overlay zones (lines) on BOTH frames
         draw_overlay_zones(frame, lm_pixel, horizontal_dev, evf_angle, phase)
+        draw_overlay_zones(frame_clean, lm_pixel, horizontal_dev, evf_angle, phase)
 
         # Calculate sub-scores
         # Alignment score (0-100)
@@ -2441,17 +2449,17 @@ class SwimAnalyzer:
         score = sum(s * w for s, w in components) / total_weight if total_weight > 0 else 0
         score = max(0, min(100, score))
 
-        # Per coach feedback (Stephanie Peterson, R3 Endurance) — coach video now
-        # matches the simpler swimmer view. Detailed metrics live in the PDF report,
-        # not in the video. The video is for showing the swimmer the LINES,
-        # not for displaying numbers.
+        # Per coach feedback (Stephanie Peterson, R3 Endurance) — coach video matches
+        # the simpler swimmer view. Detailed metrics live in the PDF report.
+        # Draw score badge + phase label on BOTH frames (realtime and slow-mo).
         score_color = (0, 200, 0) if score >= 70 else (0, 200, 220) if score >= 50 else (0, 0, 230)
-        cv2.rectangle(frame, (10, 10), (190, 65), (0, 0, 0), -1)
-        cv2.rectangle(frame, (10, 10), (190, 65), score_color, 2)
-        cv2.putText(frame, f"Score: {score:.0f}/100", (18, 38),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, score_color, 2)
-        cv2.putText(frame, phase, (18, 58),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+        for _f in (frame, frame_clean):
+            cv2.rectangle(_f, (10, 10), (190, 65), (0, 0, 0), -1)
+            cv2.rectangle(_f, (10, 10), (190, 65), score_color, 2)
+            cv2.putText(_f, f"Score: {score:.0f}/100", (18, 38),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, score_color, 2)
+            cv2.putText(_f, phase, (18, 58),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
         # Track best/worst frames during Pull phase
         if phase == "Pull":
@@ -2497,7 +2505,7 @@ class SwimAnalyzer:
         )
         self.metrics.append(metrics)
 
-        return frame, score
+        return frame, frame_clean, score
 
     def close(self):
         if hasattr(self, 'landmarker') and self.landmarker:
@@ -3887,13 +3895,15 @@ def main():
                 timestamp_ms = frame_idx * 33 + 1
                 real_t = frame_idx / fps
 
-                annotated, _ = analyzer.process(frame, real_t, timestamp_ms, fps)
+                annotated, annotated_clean, _ = analyzer.process(frame, real_t, timestamp_ms, fps)
 
                 if use_pyav:
+                    # Realtime: WITH dots
                     av_frame = av.VideoFrame.from_ndarray(annotated, format='bgr24')
                     for packet in av_stream.encode(av_frame):
                         av_container.mux(packet)
-                    slowmo_frame = av.VideoFrame.from_ndarray(annotated, format='bgr24')
+                    # Slow-mo: NO dots (clean lines only — coach feedback)
+                    slowmo_frame = av.VideoFrame.from_ndarray(annotated_clean, format='bgr24')
                     for packet in slowmo_stream.encode(slowmo_frame):
                         slowmo_container.mux(packet)
                 else:
