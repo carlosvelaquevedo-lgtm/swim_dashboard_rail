@@ -2042,6 +2042,11 @@ class SwimAnalyzer:
         self.best_dev = float('inf')
         self.worst_dev = -float('inf')
         self.best_bytes = self.worst_bytes = None
+        self.best_frame_idx = self.worst_frame_idx = -1
+        # Ring buffer of pull frame candidates so we can recover if best/worst collide
+        from collections import deque as _deque
+        self._pull_candidates = _deque(maxlen=12)  # (dev, frame_idx, jpeg_bytes)
+        self._pull_frame_counter = 0
 
         # Smoothing buffers
         self.torso_buffer = deque(maxlen=7)
@@ -2538,17 +2543,28 @@ class SwimAnalyzer:
             cv2.putText(_f, phase, (18, 58),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
-        # Track best/worst frames during Pull phase
+        # Track best/worst frames during Pull phase.
+        # Bug fix: previously best and worst could be the same frame when there
+        # was only one Pull frame or when dev values were near-identical. We now
+        # require a separate frame index for each, and keep a candidate ring so
+        # we can pick a spread retroactively at finalize time.
         if phase == "Pull":
+            self._pull_frame_counter += 1
             dev = abs(elbow - 110) + horizontal_dev + evf_angle * 0.5
+            _, _buf = cv2.imencode('.jpg', frame)
+            _jpeg = _buf.tobytes()
+            self._pull_candidates.append((dev, self._pull_frame_counter, _jpeg))
+
             if dev < self.best_dev:
                 self.best_dev = dev
-                _, buf = cv2.imencode('.jpg', frame)
-                self.best_bytes = buf.tobytes()
-            if dev > self.worst_dev:
+                self.best_bytes = _jpeg
+                self.best_frame_idx = self._pull_frame_counter
+
+            # Worst must be a DIFFERENT frame than best
+            if dev > self.worst_dev and self._pull_frame_counter != self.best_frame_idx:
                 self.worst_dev = dev
-                _, buf = cv2.imencode('.jpg', frame)
-                self.worst_bytes = buf.tobytes()
+                self.worst_bytes = _jpeg
+                self.worst_frame_idx = self._pull_frame_counter
 
         # Store metrics
         metrics = FrameMetrics(
@@ -2758,6 +2774,32 @@ class SwimAnalyzer:
 
         if not diagnostics:
             diagnostics.append("✅ Great technique! Keep up the good work.")
+
+        # ── Finalize best/worst pull frames ──
+        # If we only ever locked in one frame (best), or best and worst ended up
+        # identical, pick the worst from the candidate ring such that it's a
+        # different frame from best and has the largest dev gap.
+        if (
+            self.best_bytes is not None
+            and (self.worst_bytes is None or self.worst_frame_idx == self.best_frame_idx)
+            and len(self._pull_candidates) > 1
+        ):
+            # Find candidate with largest dev that is NOT the best frame
+            candidates_sorted = sorted(
+                [c for c in self._pull_candidates if c[1] != self.best_frame_idx],
+                key=lambda c: c[0],
+                reverse=True,
+            )
+            if candidates_sorted:
+                _wdev, _widx, _wjpeg = candidates_sorted[0]
+                self.worst_dev = _wdev
+                self.worst_bytes = _wjpeg
+                self.worst_frame_idx = _widx
+
+        # If we still can't produce two distinct Pull frames (e.g. only one Pull
+        # frame in the whole clip), drop the worst slot rather than duplicate.
+        if self.worst_frame_idx == self.best_frame_idx:
+            self.worst_bytes = None
 
         # ── Reliability flag ──
         # If a large fraction of pose-detected frames were rejected for
@@ -4221,6 +4263,8 @@ def main():
                 with col2:
                     if summary.worst_frame_bytes:
                         st.image(summary.worst_frame_bytes, caption="Worst Pull Frame")
+                    else:
+                        st.caption("_Only one clean Pull frame detected — record a longer clip for best/worst comparison._")
 
                 # Annotated video
                 st.subheader("🎬 Annotated Video")
@@ -4402,7 +4446,7 @@ def main():
                     if summary.worst_frame_bytes:
                         st.image(summary.worst_frame_bytes, caption="Worst Pull Frame")
                     else:
-                        st.info("No worst frame captured")
+                        st.caption("_Only one clean Pull frame detected — record a longer clip for best/worst comparison._")
 
                 # Video player
                 st.subheader("🎬 Annotated Video")
