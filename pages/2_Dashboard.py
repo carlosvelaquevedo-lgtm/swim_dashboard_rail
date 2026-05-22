@@ -3392,13 +3392,39 @@ def check_ffmpeg_available() -> bool:
 
 FFMPEG_AVAILABLE = check_ffmpeg_available()
 
+# Longest-side cap for preconvert downscale — keeps small subjects detectable
+# while still cutting per-frame memory ~80% vs raw 4K.
+MAX_LONGEST_SIDE = 1280
+
+
+def _probe_video_dimensions(input_path: str) -> Tuple[int, int]:
+    """Return (width, height) from ffprobe, or (0, 0) on failure."""
+    try:
+        probe_result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+             '-show_entries', 'stream=width,height', '-of', 'csv=p=0',
+             input_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10
+        )
+        parts = probe_result.stdout.decode().strip().split(',')
+        if len(parts) >= 2:
+            w = int(parts[0]) if parts[0].isdigit() else 0
+            h = int(parts[1]) if parts[1].isdigit() else 0
+            return w, h
+    except Exception:
+        pass
+    return 0, 0
+
+
 def preconvert_to_h264(input_path: str) -> Tuple[str, bool]:
     """
     Convert input video to H.264 MP4 with memory-optimized settings.
     
     This does THREE things to prevent OOM on low-memory servers:
     1. Transcodes HEVC/MOV → H.264 (so OpenCV can read it)
-    2. Downscales to max 720p height (reduces per-frame memory ~75%)
+    2. Downscales so the longest side is MAX_LONGEST_SIDE px (~80% memory savings vs 4K)
     3. Caps FPS at 30 (halves frame count for 60fps phone recordings)
     
     Returns:
@@ -3441,7 +3467,7 @@ def preconvert_to_h264(input_path: str) -> Tuple[str, bool]:
                 input_fps = 30.0
             
             needs_conversion = codec not in ('h264', 'libx264')
-            needs_downscale = max(input_width, input_height) > 720
+            needs_downscale = max(input_width, input_height) > MAX_LONGEST_SIDE
             needs_fps_cap = input_fps > 32
             
             logging.info(f"Video probe: codec={codec}, {input_width}x{input_height}, {input_fps:.1f}fps | "
@@ -3468,14 +3494,14 @@ def preconvert_to_h264(input_path: str) -> Tuple[str, bool]:
     vf_filters = []
     
     if needs_downscale:
-        # Scale so the LONGEST side is 720px, preserving aspect ratio
-        # -2 ensures dimensions are divisible by 2 (required for H.264)
+        # Scale so the LONGEST side is MAX_LONGEST_SIDE, preserving aspect ratio.
+        # -2 ensures dimensions are divisible by 2 (required for H.264).
         if input_height > input_width:
-            # Portrait: cap height at 720
-            vf_filters.append("scale=-2:720")
+            # Portrait: long side is height
+            vf_filters.append(f"scale=-2:{MAX_LONGEST_SIDE}")
         else:
-            # Landscape: cap width at 720
-            vf_filters.append("scale=720:-2")
+            # Landscape: long side is width
+            vf_filters.append(f"scale={MAX_LONGEST_SIDE}:-2")
     
     if needs_fps_cap:
         vf_filters.append("fps=30")
@@ -3968,14 +3994,22 @@ def main():
                     track("analysis_started", {"video_type": video_type})
                     st.session_state.analysis_tracked = True
 
-                analyzer = SwimAnalyzer(athlete, conf_thresh, yaw_thresh,
-                                        manual_camera_view=manual_camera_view,
-                                        manual_water_position=manual_water_position,
-                                        report_mode=report_mode)
-
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_in:
                     tmp_in.write(uploaded.getvalue())
                     input_path = tmp_in.name
+
+                # Auto-pick Heavy model when the SOURCE video was HD or larger.
+                _src_w, _src_h = _probe_video_dimensions(input_path)
+                _src_long_side = max(_src_w, _src_h)
+                _use_heavy = _src_long_side >= MAX_LONGEST_SIDE
+                if _use_heavy:
+                    st.info("📹 HD video detected — using the high-accuracy pose model (first run downloads ~120MB, then cached).")
+
+                analyzer = SwimAnalyzer(athlete, conf_thresh, yaw_thresh,
+                                        manual_camera_view=manual_camera_view,
+                                        manual_water_position=manual_water_position,
+                                        use_heavy_model=_use_heavy,
+                                        report_mode=report_mode)
 
                 # ── PRE-CONVERT HEVC/MOV TO H.264 ──
                 # iPhone screen recordings and many phone cameras use HEVC (H.265)
