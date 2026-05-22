@@ -769,6 +769,8 @@ class SessionSummary:
     avg_glide_score: float = 0.0       # Average quality of glide phases
     glide_frames: int = 0              # Number of frames in glide
     total_analyzed_frames: int = 0     # Total frames analyzed
+    low_visibility_ratio: float = 0.0
+    low_visibility_warning: bool = False
 
 # ─────────────────────────────────────────────
 # HELPERS - Enhanced calculations
@@ -2163,6 +2165,33 @@ class SwimAnalyzer:
             vis_count += 1
 
         conf = vis_sum / vis_count if vis_count > 0 else 0.0
+
+        # ── Per-landmark visibility gate for scoring-critical joints ──
+        # The whole-body average hides bad arm landmarks: shoulders/hips often
+        # report visibility 1.0 (inferred from torso silhouette) while the
+        # elbow and wrist — the ones EVF and elbow-angle scoring depend on —
+        # are sub-0.5. Require the critical joints individually.
+        CRITICAL_MIN_VIS = 0.55
+        try:
+            l_elbow_v = landmarks[13].visibility
+            r_elbow_v = landmarks[14].visibility
+            l_wrist_v = landmarks[15].visibility
+            r_wrist_v = landmarks[16].visibility
+        except Exception:
+            l_elbow_v = r_elbow_v = l_wrist_v = r_wrist_v = 0.0
+
+        left_arm_vis_ok = l_elbow_v >= CRITICAL_MIN_VIS and l_wrist_v >= CRITICAL_MIN_VIS
+        right_arm_vis_ok = r_elbow_v >= CRITICAL_MIN_VIS and r_wrist_v >= CRITICAL_MIN_VIS
+        critical_arms_vis_ok = left_arm_vis_ok or right_arm_vis_ok
+
+        # Track drop counters (initialize on first frame)
+        if not hasattr(self, "_low_vis_skipped"):
+            self._low_vis_skipped = 0
+            self._geom_skipped = 0
+            self._total_pose_frames = 0
+        self._total_pose_frames += 1
+        if not critical_arms_vis_ok:
+            self._low_vis_skipped += 1
         
         # === POSE VALIDATION ===
         # Reject false positives where MediaPipe detects pool lane markings as a person
@@ -2187,7 +2216,55 @@ class SwimAnalyzer:
                 self.video_context = self.context_detector.get_context()
                 self.available_metrics = get_metrics_for_context(self.video_context)
         
-        if conf < self.conf_thresh:
+        if conf < self.conf_thresh or not critical_arms_vis_ok:
+            return frame, frame, None
+
+        # ── Geometric plausibility check: detect joint-collapse hallucinations ──
+        # When MediaPipe can't see the submerged arm, it collapses the elbow
+        # and wrist onto the shoulder or hip — reporting high visibility but
+        # anatomically impossible joint positions. Reject frames where either
+        # arm has clearly collapsed onto the torso.
+        def _dist(p1, p2):
+            return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
+
+        geom_arm_valid = False
+        try:
+            ls = (landmarks[11].x * w, landmarks[11].y * h)
+            rs = (landmarks[12].x * w, landmarks[12].y * h)
+            le = (landmarks[13].x * w, landmarks[13].y * h)
+            re = (landmarks[14].x * w, landmarks[14].y * h)
+            lw = (landmarks[15].x * w, landmarks[15].y * h)
+            rw = (landmarks[16].x * w, landmarks[16].y * h)
+            lh = (landmarks[23].x * w, landmarks[23].y * h)
+            rh = (landmarks[24].x * w, landmarks[24].y * h)
+
+            sh_mid = ((ls[0] + rs[0]) / 2, (ls[1] + rs[1]) / 2)
+            hip_mid = ((lh[0] + rh[0]) / 2, (lh[1] + rh[1]) / 2)
+            torso_len = _dist(sh_mid, hip_mid)
+
+            if torso_len >= 20:  # else pose is degenerate
+                COLLAPSE_RATIO = 0.25       # arm segment must be ≥ 25% of torso length
+                WRIST_HIP_MIN_RATIO = 0.20  # wrist must be ≥ 20% torso-lengths from same-side hip
+
+                l_upper_ok = (_dist(ls, le) / torso_len) >= COLLAPSE_RATIO
+                l_fore_ok  = (_dist(le, lw) / torso_len) >= COLLAPSE_RATIO
+                l_wrist_off_hip = (_dist(lw, lh) / torso_len) >= WRIST_HIP_MIN_RATIO
+                left_arm_geom_ok = l_upper_ok and l_fore_ok and l_wrist_off_hip
+
+                r_upper_ok = (_dist(rs, re) / torso_len) >= COLLAPSE_RATIO
+                r_fore_ok  = (_dist(re, rw) / torso_len) >= COLLAPSE_RATIO
+                r_wrist_off_hip = (_dist(rw, rh) / torso_len) >= WRIST_HIP_MIN_RATIO
+                right_arm_geom_ok = r_upper_ok and r_fore_ok and r_wrist_off_hip
+
+                # Frame is valid for scoring if at least one arm passes BOTH
+                # visibility and geometric checks.
+                geom_arm_valid = (left_arm_vis_ok and left_arm_geom_ok) or \
+                                 (right_arm_vis_ok and right_arm_geom_ok)
+        except Exception:
+            geom_arm_valid = False
+
+        if not geom_arm_valid:
+            self._geom_skipped += 1
             return frame, frame, None
 
         # Check for inverted video (upside-down footage)
@@ -2682,6 +2759,15 @@ class SwimAnalyzer:
         if not diagnostics:
             diagnostics.append("✅ Great technique! Keep up the good work.")
 
+        # ── Reliability flag ──
+        # If a large fraction of pose-detected frames were rejected for
+        # visibility OR geometric collapse, the score is unreliable.
+        _dropped = getattr(self, '_low_vis_skipped', 0) + getattr(self, '_geom_skipped', 0)
+        _total = max(1, getattr(self, '_total_pose_frames', 0))
+        _drop_ratio = _dropped / _total
+        self.low_visibility_ratio = _drop_ratio
+        self.low_visibility_warning = _drop_ratio > 0.5
+
         return SessionSummary(
             duration_s=d,
             avg_score=statistics.mean(scores) if scores else 0,
@@ -2714,7 +2800,9 @@ class SwimAnalyzer:
             glide_ratio=glide_ratio,
             avg_glide_score=avg_glide_score,
             glide_frames=self.glide_frames,
-            total_analyzed_frames=len(high_conf_metrics)
+            total_analyzed_frames=len(high_conf_metrics),
+            low_visibility_ratio=self.low_visibility_ratio,
+            low_visibility_warning=self.low_visibility_warning,
         )
 
 # ─────────────────────────────────────────────
@@ -4060,6 +4148,17 @@ def main():
                         st.video(io.BytesIO(video_bytes))
                     # Skip the rest of the swimmer results display
                     st.stop()
+                if summary.low_visibility_warning:
+                    pct_clean = (1 - summary.low_visibility_ratio) * 100
+                    st.warning(
+                        f"⚠️ **Score may be unreliable.** Your arms were clearly visible "
+                        f"in only {pct_clean:.0f}% of frames. The remaining frames were rejected "
+                        "because the elbow or wrist couldn't be reliably located — usually due "
+                        "to surface glare, the swimmer being too far from camera, or most of "
+                        "the body being below the waterline.\n\n"
+                        "**For an accurate score:** underwater side view, swimmer filling at "
+                        "least 40% of the frame width, even lighting, no strong surface glare."
+                    )
                 score_color = "#22c55e" if summary.avg_score >= 70 else "#eab308" if summary.avg_score >= 50 else "#ef4444"
                 score_label = "Great" if summary.avg_score >= 70 else "Good" if summary.avg_score >= 50 else "Needs Work"
                 st.markdown(f"""
@@ -4162,6 +4261,17 @@ def main():
                         st.subheader("📹 Annotated Video")
                         st.video(io.BytesIO(video_bytes))
                     st.stop()
+                if summary.low_visibility_warning:
+                    pct_clean = (1 - summary.low_visibility_ratio) * 100
+                    st.warning(
+                        f"⚠️ **Score may be unreliable.** Your arms were clearly visible "
+                        f"in only {pct_clean:.0f}% of frames. The remaining frames were rejected "
+                        "because the elbow or wrist couldn't be reliably located — usually due "
+                        "to surface glare, the swimmer being too far from camera, or most of "
+                        "the body being below the waterline.\n\n"
+                        "**For an accurate score:** underwater side view, swimmer filling at "
+                        "least 40% of the frame width, even lighting, no strong surface glare."
+                    )
                 # Display video type information - User selected vs Auto-detected
                 st.markdown("### 📹 Video Type")
                 col_user, col_auto = st.columns(2)
