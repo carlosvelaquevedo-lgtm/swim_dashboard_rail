@@ -79,13 +79,22 @@ def verify_stripe_payment(session_id: str) -> bool:
         return False
 
 # ── Verify Stripe payment from URL query params ──
+# Each verified session_id is one analysis credit. The credit is CONSUMED at the
+# end of a successful analysis (see end-of-analysis block). Admin tokens grant
+# unlimited credits for the session.
 if not st.session_state.get("paid", False):
     session_id = st.query_params.get("session_id", "")
     admin_key = st.query_params.get("admin_key", "")
-    
+
     if session_id:
-        if verify_stripe_payment(session_id):
+        # Don't re-grant a credit for a session_id that was already consumed
+        used = st.session_state.get("consumed_session_ids", set())
+        if session_id in used:
+            st.session_state["paid"] = False
+        elif verify_stripe_payment(session_id):
             st.session_state["paid"] = True
+            st.session_state["active_session_id"] = session_id
+            st.session_state["is_admin_session"] = False
     elif admin_key:
         valid_tokens = [
             os.environ.get("ADMIN_TOKEN", ""),
@@ -93,13 +102,18 @@ if not st.session_state.get("paid", False):
         ]
         if admin_key in [t for t in valid_tokens if t]:
             st.session_state["paid"] = True
+            st.session_state["is_admin_session"] = True
             track("admin_access", {"method": "admin_key"})
             mode_param = st.query_params.get("report_mode", "swimmer")
             if mode_param in ("swimmer", "coach"):
                 st.session_state["report_mode"] = mode_param
             st.query_params.clear()
             st.rerun()
-if not st.session_state.get("paid", False) and not IS_DEV:
+if (
+    not st.session_state.get("paid", False)
+    and not IS_DEV
+    and not st.session_state.get("credit_consumed_for_cache_key")
+):
     st.error("⛔ Access denied. Please complete payment to access the dashboard.")
     st.markdown("**[← Return to SwimForm AI](/)** to purchase your analysis.")
     st.stop()
@@ -3604,9 +3618,14 @@ def main():
     if session_id and not st.session_state.get("paid", False):
         # Verify payment server-side via Stripe API
         with st.spinner("Verifying payment..."):
-            if verify_stripe_payment(session_id):
+            used = st.session_state.get("consumed_session_ids", set())
+            if session_id in used:
+                st.session_state.paid = False
+            elif verify_stripe_payment(session_id):
                 st.session_state.paid = True
                 st.session_state.stripe_session_id = session_id
+                st.session_state["active_session_id"] = session_id
+                st.session_state["is_admin_session"] = False
                 st.success("Payment verified! Loading dashboard...")
                 # Keep verified session_id in URL so mobile reconnects can recover
                 st.query_params["verified"] = session_id
@@ -3623,8 +3642,13 @@ def main():
         # Try recovering from verified query param (handles mobile browser reconnects)
         verified_id = query_params.get("verified")
         if verified_id:
-            if verify_stripe_payment(verified_id):
+            used = st.session_state.get("consumed_session_ids", set())
+            if verified_id in used:
+                st.session_state.paid = False
+            elif verify_stripe_payment(verified_id):
                 st.session_state.paid = True
+                st.session_state["active_session_id"] = verified_id
+                st.session_state["is_admin_session"] = False
                 # Continue to dashboard — don't stop
             else:
                 st.error("Access Denied - Payment session expired. Please purchase again.")
@@ -3637,7 +3661,10 @@ def main():
                     st.link_button("Go to Payment", STRIPE_PAYMENT_LINK, use_container_width=True, type="primary")
                 st.stop()
     
-    if not st.session_state.get("paid", False):
+    if (
+        not st.session_state.get("paid", False)
+        and not st.session_state.get("credit_consumed_for_cache_key")
+    ):
         st.error("Access Denied - Please complete payment")
         st.markdown("Please complete payment to access the swim analysis dashboard.")
         
@@ -3751,7 +3778,28 @@ def main():
     # ═══════════════════════════════════════════════════════════════
 
     st.subheader("📹 Step 1: Upload Your Video")
-    uploaded = st.file_uploader("Upload swimming video", type=["mp4", "mov", "avi", "MOV", "MP4", "AVI", "m4v", "M4V"])
+
+    # If a credit was just consumed, only allow viewing the cached result for
+    # that exact upload. A NEW upload requires a fresh paid session.
+    _credit_consumed = st.session_state.get("credit_consumed_for_cache_key")
+    _is_admin = st.session_state.get("is_admin_session", False)
+    _has_credit = st.session_state.get("paid", False) or _is_admin
+
+    if not _has_credit and _credit_consumed:
+        st.info(
+            "✅ Your analysis is ready below. To analyze another video, "
+            "please [purchase another report](/) — each report is a one-time analysis."
+        )
+        uploaded = None
+    elif not _has_credit:
+        st.error("⛔ Please complete payment to upload a video.")
+        st.markdown("**[← Return to SwimForm AI](/)** to purchase your analysis.")
+        st.stop()
+    else:
+        uploaded = st.file_uploader(
+            "Upload swimming video",
+            type=["mp4", "mov", "avi", "MOV", "MP4", "AVI", "m4v", "M4V"],
+        )
     if uploaded and "upload_tracked" not in st.session_state:
         track("video_uploaded", {"filename": uploaded.name, "size_mb": round(len(uploaded.getvalue()) / (1024 * 1024), 1)})
         st.session_state.upload_tracked = True
@@ -3874,92 +3922,93 @@ def main():
         # Note: Payment has already been verified at the top of this page
         # Users can only access this dashboard if they've completed payment
 
+    # Allow rendering the cached result even after the uploader was cleared,
+    # so a user who just paid can still see/download their analysis.
+    _post_consume_cache_key = st.session_state.get("credit_consumed_for_cache_key")
+    _cache_only_mode = False
     if uploaded and video_type:
-        # Use a cache key based on file name + size to detect new uploads
-        cache_key = f"{uploaded.name}_{len(uploaded.getvalue())}"
+        pass  # original flow continues below
+    elif _post_consume_cache_key and "analysis_results" in st.session_state:
+        cache_key = _post_consume_cache_key
+        cached = st.session_state["analysis_results"]
+        summary = cached["summary"]
+        video_bytes = cached["video_bytes"]
+        pdf_buf = cached["pdf_buf"]
+        csv_buf = cached["csv_buf"]
+        zip_buf = cached["zip_buf"]
+        timestamp = cached["timestamp"]
+        plot_buf = cached["plot_buf"]
+        selected_camera = cached["selected_camera"]
+        selected_water = cached["selected_water"]
+        _cache_only_mode = True
 
-        if st.session_state.get("analysis_cache_key") == cache_key and "analysis_results" in st.session_state:
-            # Reuse cached results — do NOT re-process
-            cached = st.session_state["analysis_results"]
-            summary = cached["summary"]
-            video_bytes = cached["video_bytes"]
-            pdf_buf = cached["pdf_buf"]
-            csv_buf = cached["csv_buf"]
-            zip_buf = cached["zip_buf"]
-            timestamp = cached["timestamp"]
-            plot_buf = cached["plot_buf"]
-            selected_camera = cached["selected_camera"]
-            selected_water = cached["selected_water"]
-        else:
-          try:
-            manual_camera_view = selected_camera
-            manual_water_position = selected_water
+    if (uploaded and video_type) or _cache_only_mode:
+        if not _cache_only_mode:
+            # Use a cache key based on file name + size to detect new uploads
+            cache_key = f"{uploaded.name}_{len(uploaded.getvalue())}"
 
-            if "analysis_tracked" not in st.session_state:
-                track("analysis_started", {"video_type": video_type})
-                st.session_state.analysis_tracked = True
+            if st.session_state.get("analysis_cache_key") == cache_key and "analysis_results" in st.session_state:
+                # Reuse cached results — do NOT re-process
+                cached = st.session_state["analysis_results"]
+                summary = cached["summary"]
+                video_bytes = cached["video_bytes"]
+                pdf_buf = cached["pdf_buf"]
+                csv_buf = cached["csv_buf"]
+                zip_buf = cached["zip_buf"]
+                timestamp = cached["timestamp"]
+                plot_buf = cached["plot_buf"]
+                selected_camera = cached["selected_camera"]
+                selected_water = cached["selected_water"]
+            else:
+              try:
+                manual_camera_view = selected_camera
+                manual_water_position = selected_water
 
-            analyzer = SwimAnalyzer(athlete, conf_thresh, yaw_thresh,
-                                    manual_camera_view=manual_camera_view,
-                                    manual_water_position=manual_water_position,
-                                    report_mode=report_mode)
+                if "analysis_tracked" not in st.session_state:
+                    track("analysis_started", {"video_type": video_type})
+                    st.session_state.analysis_tracked = True
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_in:
-                tmp_in.write(uploaded.getvalue())
-                input_path = tmp_in.name
+                analyzer = SwimAnalyzer(athlete, conf_thresh, yaw_thresh,
+                                        manual_camera_view=manual_camera_view,
+                                        manual_water_position=manual_water_position,
+                                        report_mode=report_mode)
 
-            # ── PRE-CONVERT HEVC/MOV TO H.264 ──
-            # iPhone screen recordings and many phone cameras use HEVC (H.265)
-            # which OpenCV often can't decode. Convert to H.264 first.
-            converted_path = None
-            conversion_status = st.empty()
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_in:
+                    tmp_in.write(uploaded.getvalue())
+                    input_path = tmp_in.name
 
-            input_path_original = input_path  # keep reference for cleanup
-            input_path, was_converted = preconvert_to_h264(input_path)
+                # ── PRE-CONVERT HEVC/MOV TO H.264 ──
+                # iPhone screen recordings and many phone cameras use HEVC (H.265)
+                # which OpenCV often can't decode. Convert to H.264 first.
+                converted_path = None
+                conversion_status = st.empty()
 
-            if was_converted:
-                converted_path = input_path  # track for cleanup
-                conversion_status.success("✅ Video optimized (converted to H.264, downscaled for performance)")
-            elif not FFMPEG_AVAILABLE:
-                conversion_status.warning("⚠️ FFmpeg not available — using original file directly. "
-                                          "If analysis fails, the video format may not be supported.")
+                input_path_original = input_path  # keep reference for cleanup
+                input_path, was_converted = preconvert_to_h264(input_path)
 
-            # ── VALIDATE VIDEO CAN BE OPENED ──
-            cap = cv2.VideoCapture(input_path)
+                if was_converted:
+                    converted_path = input_path  # track for cleanup
+                    conversion_status.success("✅ Video optimized (converted to H.264, downscaled for performance)")
+                elif not FFMPEG_AVAILABLE:
+                    conversion_status.warning("⚠️ FFmpeg not available — using original file directly. "
+                                              "If analysis fails, the video format may not be supported.")
 
-            # Free the in-memory upload buffer now that we've written to disk
-            # This can reclaim 10-100MB depending on video size
-            gc.collect()
+                # ── VALIDATE VIDEO CAN BE OPENED ──
+                cap = cv2.VideoCapture(input_path)
 
-            if not cap.isOpened():
-                cap.release()
-                st.error("❌ **Could not open this video file.** "
-                         "This usually means the video codec is not supported. "
-                         "Please try one of these:\n"
-                         "- Convert to MP4 (H.264) using a free tool like HandBrake or VLC\n"
-                         "- Record using your phone's camera app instead of screen recording\n"
-                         "- Contact info@swimform-ai.com for help")
-                # Cleanup
-                try:
-                    os.unlink(input_path_original)
-                    if converted_path:
-                        os.unlink(converted_path)
-                except:
-                    pass
-                st.stop()
+                # Free the in-memory upload buffer now that we've written to disk
+                # This can reclaim 10-100MB depending on video size
+                gc.collect()
 
-            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-            # Additional validation: check we can actually read frames
-            if total == 0 or w == 0 or h == 0:
-                ret_test, frame_test = cap.read()
-                if not ret_test:
+                if not cap.isOpened():
                     cap.release()
-                    st.error("❌ **Video file appears to be empty or unreadable.** "
-                             "Please try a different video or convert to MP4 (H.264).")
+                    st.error("❌ **Could not open this video file.** "
+                             "This usually means the video codec is not supported. "
+                             "Please try one of these:\n"
+                             "- Convert to MP4 (H.264) using a free tool like HandBrake or VLC\n"
+                             "- Record using your phone's camera app instead of screen recording\n"
+                             "- Contact info@swimform-ai.com for help")
+                    # Cleanup
                     try:
                         os.unlink(input_path_original)
                         if converted_path:
@@ -3967,202 +4016,243 @@ def main():
                     except:
                         pass
                     st.stop()
-                # If we could read a frame but metadata was wrong, re-get info
-                h_frame, w_frame = frame_test.shape[:2]
-                if w == 0:
-                    w = w_frame
-                if h == 0:
-                    h = h_frame
-                # Reset capture to beginning
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-            # --- OUTPUT VIDEO SETUP (PyAV preferred, OpenCV+FFmpeg fallback) ---
-            out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-            slowmo_out_path = tempfile.NamedTemporaryFile(delete=False, suffix="_slowmo.mp4").name
-            temp_raw_path = None  # Only used in fallback path
-            use_pyav = PYAV_AVAILABLE
-            slowmo_container = None
-            slowmo_stream = None
+                fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+                w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-            if use_pyav:
-                # PyAV: write H.264 MP4 directly, frame by frame — no intermediate AVI
-                av_container = av.open(out_path, mode='w')
-                av_stream = av_container.add_stream('libx264', rate=int(fps))
-                av_stream.width = w
-                av_stream.height = h
-                av_stream.pix_fmt = 'yuv420p'
-                av_stream.options = {
-                    'preset': 'fast',
-                    'crf': '23',
-                    'movflags': '+faststart',
-                }
-                # Slow-mo (0.5x) — coach feedback: full speed is too fast to follow lines
-                slowmo_container = av.open(slowmo_out_path, mode='w')
-                slowmo_stream = slowmo_container.add_stream('libx264', rate=max(int(fps / 2), 1))
-                slowmo_stream.width = w
-                slowmo_stream.height = h
-                slowmo_stream.pix_fmt = 'yuv420p'
-                slowmo_stream.options = {
-                    'preset': 'fast',
-                    'crf': '23',
-                    'movflags': '+faststart',
-                }
-            else:
-                # Fallback: OpenCV raw AVI → FFmpeg re-encode
-                temp_raw_path = tempfile.NamedTemporaryFile(delete=False, suffix=".avi").name
-                fourcc = cv2.VideoWriter_fourcc(*'XVID')
-                writer = cv2.VideoWriter(temp_raw_path, fourcc, fps, (w, h))
+                # Additional validation: check we can actually read frames
+                if total == 0 or w == 0 or h == 0:
+                    ret_test, frame_test = cap.read()
+                    if not ret_test:
+                        cap.release()
+                        st.error("❌ **Video file appears to be empty or unreadable.** "
+                                 "Please try a different video or convert to MP4 (H.264).")
+                        try:
+                            os.unlink(input_path_original)
+                            if converted_path:
+                                os.unlink(converted_path)
+                        except:
+                            pass
+                        st.stop()
+                    # If we could read a frame but metadata was wrong, re-get info
+                    h_frame, w_frame = frame_test.shape[:2]
+                    if w == 0:
+                        w = w_frame
+                    if h == 0:
+                        h = h_frame
+                    # Reset capture to beginning
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-            st.markdown("### ⏳ Processing Video")
-            processing_progress = st.progress(0)
-            processing_status = st.empty()
-
-            frame_idx = 0
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret: break
-
-                timestamp_ms = frame_idx * 33 + 1
-                real_t = frame_idx / fps
-
-                annotated, annotated_clean, _ = analyzer.process(frame, real_t, timestamp_ms, fps)
+                # --- OUTPUT VIDEO SETUP (PyAV preferred, OpenCV+FFmpeg fallback) ---
+                out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+                slowmo_out_path = tempfile.NamedTemporaryFile(delete=False, suffix="_slowmo.mp4").name
+                temp_raw_path = None  # Only used in fallback path
+                use_pyav = PYAV_AVAILABLE
+                slowmo_container = None
+                slowmo_stream = None
 
                 if use_pyav:
-                    # Realtime: WITH dots
-                    av_frame = av.VideoFrame.from_ndarray(annotated, format='bgr24')
-                    for packet in av_stream.encode(av_frame):
+                    # PyAV: write H.264 MP4 directly, frame by frame — no intermediate AVI
+                    av_container = av.open(out_path, mode='w')
+                    av_stream = av_container.add_stream('libx264', rate=int(fps))
+                    av_stream.width = w
+                    av_stream.height = h
+                    av_stream.pix_fmt = 'yuv420p'
+                    av_stream.options = {
+                        'preset': 'fast',
+                        'crf': '23',
+                        'movflags': '+faststart',
+                    }
+                    # Slow-mo (0.5x) — coach feedback: full speed is too fast to follow lines
+                    slowmo_container = av.open(slowmo_out_path, mode='w')
+                    slowmo_stream = slowmo_container.add_stream('libx264', rate=max(int(fps / 2), 1))
+                    slowmo_stream.width = w
+                    slowmo_stream.height = h
+                    slowmo_stream.pix_fmt = 'yuv420p'
+                    slowmo_stream.options = {
+                        'preset': 'fast',
+                        'crf': '23',
+                        'movflags': '+faststart',
+                    }
+                else:
+                    # Fallback: OpenCV raw AVI → FFmpeg re-encode
+                    temp_raw_path = tempfile.NamedTemporaryFile(delete=False, suffix=".avi").name
+                    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+                    writer = cv2.VideoWriter(temp_raw_path, fourcc, fps, (w, h))
+
+                st.markdown("### ⏳ Processing Video")
+                processing_progress = st.progress(0)
+                processing_status = st.empty()
+
+                frame_idx = 0
+                while cap.isOpened():
+                    ret, frame = cap.read()
+                    if not ret: break
+
+                    timestamp_ms = frame_idx * 33 + 1
+                    real_t = frame_idx / fps
+
+                    annotated, annotated_clean, _ = analyzer.process(frame, real_t, timestamp_ms, fps)
+
+                    if use_pyav:
+                        # Realtime: WITH dots
+                        av_frame = av.VideoFrame.from_ndarray(annotated, format='bgr24')
+                        for packet in av_stream.encode(av_frame):
+                            av_container.mux(packet)
+                        # Slow-mo: NO dots (clean lines only — coach feedback)
+                        slowmo_frame = av.VideoFrame.from_ndarray(annotated_clean, format='bgr24')
+                        for packet in slowmo_stream.encode(slowmo_frame):
+                            slowmo_container.mux(packet)
+                    else:
+                        writer.write(annotated)
+
+                    frame_idx += 1
+                    if total > 0:
+                        processing_progress.progress(frame_idx / total)
+                    processing_status.text(f"🎬 Analyzing frame {frame_idx}/{total}")
+
+                cap.release()
+
+                if use_pyav:
+                    # Flush remaining packets
+                    for packet in av_stream.encode():
                         av_container.mux(packet)
-                    # Slow-mo: NO dots (clean lines only — coach feedback)
-                    slowmo_frame = av.VideoFrame.from_ndarray(annotated_clean, format='bgr24')
-                    for packet in slowmo_stream.encode(slowmo_frame):
+                    av_container.close()
+                    for packet in slowmo_stream.encode():
                         slowmo_container.mux(packet)
+                    slowmo_container.close()
+                    processing_status.text("✅ Analysis complete!")
                 else:
-                    writer.write(annotated)
+                    writer.release()
+                    processing_status.text("✅ Analysis complete!")
 
-                frame_idx += 1
-                if total > 0:
-                    processing_progress.progress(frame_idx / total)
-                processing_status.text(f"🎬 Analyzing frame {frame_idx}/{total}")
+                    # Free frame processing memory before re-encoding
+                    gc.collect()
 
-            cap.release()
+                    # Re-encode to H.264 for web compatibility
+                    st.markdown("### 🎥 Finalizing Video")
+                    encoding_status = st.empty()
+                    encoding_status.text("🔄 Converting to web-compatible format...")
 
-            if use_pyav:
-                # Flush remaining packets
-                for packet in av_stream.encode():
-                    av_container.mux(packet)
-                av_container.close()
-                for packet in slowmo_stream.encode():
-                    slowmo_container.mux(packet)
-                slowmo_container.close()
-                processing_status.text("✅ Analysis complete!")
-            else:
-                writer.release()
-                processing_status.text("✅ Analysis complete!")
-
-                # Free frame processing memory before re-encoding
-                gc.collect()
-
-                # Re-encode to H.264 for web compatibility
-                st.markdown("### 🎥 Finalizing Video")
-                encoding_status = st.empty()
-                encoding_status.text("🔄 Converting to web-compatible format...")
-
-                if FFMPEG_AVAILABLE:
-                    try:
-                        ffmpeg_cmd = [
-                            'ffmpeg', '-i', temp_raw_path,
-                            '-c:v', 'libx264',
-                            '-preset', 'fast',
-                            '-crf', '23',
-                            '-pix_fmt', 'yuv420p',
-                            '-movflags', '+faststart',
-                            '-threads', '1',
-                            '-y',
-                            out_path
-                        ]
-                        result = subprocess.run(
-                            ffmpeg_cmd,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            timeout=300
-                        )
-                        if result.returncode != 0:
-                            raise Exception(f"FFmpeg exit code {result.returncode}")
-                        encoding_status.text("✅ Video conversion complete!")
-                    except Exception as e:
-                        encoding_status.warning(f"⚠️ FFmpeg conversion issue: {e}. Using raw format.")
+                    if FFMPEG_AVAILABLE:
+                        try:
+                            ffmpeg_cmd = [
+                                'ffmpeg', '-i', temp_raw_path,
+                                '-c:v', 'libx264',
+                                '-preset', 'fast',
+                                '-crf', '23',
+                                '-pix_fmt', 'yuv420p',
+                                '-movflags', '+faststart',
+                                '-threads', '1',
+                                '-y',
+                                out_path
+                            ]
+                            result = subprocess.run(
+                                ffmpeg_cmd,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                timeout=300
+                            )
+                            if result.returncode != 0:
+                                raise Exception(f"FFmpeg exit code {result.returncode}")
+                            encoding_status.text("✅ Video conversion complete!")
+                        except Exception as e:
+                            encoding_status.warning(f"⚠️ FFmpeg conversion issue: {e}. Using raw format.")
+                            shutil.copy(temp_raw_path, out_path)
+                    else:
+                        encoding_status.warning("⚠️ FFmpeg not available — video may not play in all browsers.")
                         shutil.copy(temp_raw_path, out_path)
+
+                # READ VIDEO BYTES BEFORE DELETING FILES
+                with open(out_path, 'rb') as f:
+                    video_bytes = f.read()
+                slowmo_bytes = None
+                if use_pyav and os.path.exists(slowmo_out_path):
+                    with open(slowmo_out_path, 'rb') as f:
+                        slowmo_bytes = f.read()
+
+                # PROCESS RESULTS (before cleanup)
+                summary = analyzer.get_summary()
+                plot_buf = generate_plots(analyzer)
+                if report_mode == "coach":
+                    pdf_buf = generate_pdf_report(summary, uploaded.name, plot_buf)
                 else:
-                    encoding_status.warning("⚠️ FFmpeg not available — video may not play in all browsers.")
-                    shutil.copy(temp_raw_path, out_path)
+                    pdf_buf = generate_swimmer_pdf(summary, uploaded.name)
+                csv_buf = export_to_csv(analyzer)
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-            # READ VIDEO BYTES BEFORE DELETING FILES
-            with open(out_path, 'rb') as f:
-                video_bytes = f.read()
-            slowmo_bytes = None
-            if use_pyav and os.path.exists(slowmo_out_path):
-                with open(slowmo_out_path, 'rb') as f:
-                    slowmo_bytes = f.read()
+                # Create ZIP bundle (coach only; swimmer gets individual downloads)
+                zip_buf = io.BytesIO()
+                if report_mode == "coach":
+                    with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                        zipf.writestr(f"annotated_video_{timestamp}.mp4", video_bytes)
+                        if slowmo_bytes:
+                            zipf.writestr(f"annotated_video_slowmo_{timestamp}.mp4", slowmo_bytes)
+                        zipf.writestr(f"technique_report_{timestamp}.pdf", pdf_buf.getvalue())
+                        zipf.writestr(f"frame_data_{timestamp}.csv", csv_buf.getvalue())
+                    zip_buf.seek(0)
 
-            # PROCESS RESULTS (before cleanup)
-            summary = analyzer.get_summary()
-            plot_buf = generate_plots(analyzer)
-            if report_mode == "coach":
-                pdf_buf = generate_pdf_report(summary, uploaded.name, plot_buf)
-            else:
-                pdf_buf = generate_swimmer_pdf(summary, uploaded.name)
-            csv_buf = export_to_csv(analyzer)
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                # ── Consume the paid credit ──
+                # One Stripe session_id = one completed analysis. Admin sessions are
+                # exempt. After consuming, paid=False so the next upload requires a
+                # fresh Stripe checkout. The cached result is still viewable for
+                # this session via the analysis_cache_key.
+                if not st.session_state.get("is_admin_session", False):
+                    _sid = st.session_state.get("active_session_id")
+                    if _sid:
+                        _used = st.session_state.setdefault("consumed_session_ids", set())
+                        _used.add(_sid)
+                        st.session_state["consumed_session_ids"] = _used
+                    st.session_state["paid"] = False
+                    st.session_state["credit_consumed_for_cache_key"] = cache_key
+                    # Strip the session_id from the URL so a refresh doesn't re-verify
+                    try:
+                        st.query_params.pop("session_id", None)
+                        st.query_params.pop("verified", None)
+                    except Exception:
+                        pass
 
-            # Create ZIP bundle (coach only; swimmer gets individual downloads)
-            zip_buf = io.BytesIO()
-            if report_mode == "coach":
-                with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                    zipf.writestr(f"annotated_video_{timestamp}.mp4", video_bytes)
-                    if slowmo_bytes:
-                        zipf.writestr(f"annotated_video_slowmo_{timestamp}.mp4", slowmo_bytes)
-                    zipf.writestr(f"technique_report_{timestamp}.pdf", pdf_buf.getvalue())
-                    zipf.writestr(f"frame_data_{timestamp}.csv", csv_buf.getvalue())
-                zip_buf.seek(0)
+                # Cache all results so reruns (e.g. from download buttons) skip re-processing
+                st.session_state["analysis_cache_key"] = cache_key
+                st.session_state["analysis_results"] = {
+                    "summary": summary,
+                    "video_bytes": video_bytes,
+                    "slowmo_bytes": slowmo_bytes,
+                    "pdf_buf": pdf_buf,
+                    "csv_buf": csv_buf,
+                    "zip_buf": zip_buf,
+                    "timestamp": timestamp,
+                    "plot_buf": plot_buf,
+                    "selected_camera": selected_camera,
+                    "selected_water": selected_water,
+                }
 
-            # Cache all results so reruns (e.g. from download buttons) skip re-processing
-            st.session_state["analysis_cache_key"] = cache_key
-            st.session_state["analysis_results"] = {
-                "summary": summary,
-                "video_bytes": video_bytes,
-                "slowmo_bytes": slowmo_bytes,
-                "pdf_buf": pdf_buf,
-                "csv_buf": csv_buf,
-                "zip_buf": zip_buf,
-                "timestamp": timestamp,
-                "plot_buf": plot_buf,
-                "selected_camera": selected_camera,
-                "selected_water": selected_water,
-            }
+                # CLEANUP TEMP FILES (after everything is processed)
+                try:
+                    os.unlink(input_path_original)
+                    os.unlink(out_path)
+                    if os.path.exists(slowmo_out_path):
+                        os.unlink(slowmo_out_path)
+                    if temp_raw_path and os.path.exists(temp_raw_path):
+                        os.unlink(temp_raw_path)
+                    if converted_path and converted_path != input_path_original:
+                        os.unlink(converted_path)
+                except:
+                    pass
 
-            # CLEANUP TEMP FILES (after everything is processed)
-            try:
-                os.unlink(input_path_original)
-                os.unlink(out_path)
-                if os.path.exists(slowmo_out_path):
-                    os.unlink(slowmo_out_path)
-                if temp_raw_path and os.path.exists(temp_raw_path):
-                    os.unlink(temp_raw_path)
-                if converted_path and converted_path != input_path_original:
-                    os.unlink(converted_path)
-            except:
-                pass
+                analyzer.close()
 
-            analyzer.close()
+              except Exception as e:
+                import traceback
+                tb_str = traceback.format_exc()
+                logging.exception(f"Processing error: {type(e).__name__}: {e}")
+                st.error(f"Something went wrong processing your video. Error: {type(e).__name__}. "
+                         "Please try a different clip or contact info@swimform-ai.com")
+                with st.expander("🔍 Debug Details (click to expand)"):
+                    st.code(tb_str, language="python")
 
-          except Exception as e:
-            import traceback
-            tb_str = traceback.format_exc()
-            logging.exception(f"Processing error: {type(e).__name__}: {e}")
-            st.error(f"Something went wrong processing your video. Error: {type(e).__name__}. "
-                     "Please try a different clip or contact info@swimform-ai.com")
-            with st.expander("🔍 Debug Details (click to expand)"):
-                st.code(tb_str, language="python")
 
         # === DISPLAY RESULTS (runs from cache or fresh) ===
         if "analysis_results" in st.session_state and st.session_state.get("analysis_cache_key") == cache_key:
