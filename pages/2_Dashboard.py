@@ -3420,143 +3420,82 @@ def _probe_video_dimensions(input_path: str) -> Tuple[int, int]:
 
 def preconvert_to_h264(input_path: str) -> Tuple[str, bool]:
     """
-    Convert input video to H.264 MP4 with memory-optimized settings.
-    
-    This does THREE things to prevent OOM on low-memory servers:
-    1. Transcodes HEVC/MOV → H.264 (so OpenCV can read it)
-    2. Downscales so the longest side is MAX_LONGEST_SIDE px (~80% memory savings vs 4K)
-    3. Caps FPS at 30 (halves frame count for 60fps phone recordings)
-    
-    Returns:
-        - output_path: path to converted file (or original if conversion skipped/failed)
-        - was_converted: True if conversion was performed
+    Normalize ANY upload to constant-framerate (CFR) H.264 MP4.
+
+    The analysis assumes evenly-spaced frames: real_t = frame_idx / fps, and all
+    velocity math (e.g. wrist_velocity_y *= fps). Variable-framerate sources
+    (GoPro, some phones) violate that and silently produce a WRONG report. So we
+    ALWAYS re-encode to CFR 30 H.264, downscaling 4K -> 1280 long-side for memory.
+
+    Returns (output_path, ok). ok=False means normalization could NOT be
+    guaranteed -- the caller MUST reject the upload, never analyze the raw file.
     """
     if not FFMPEG_AVAILABLE:
-        logging.warning("ffmpeg not available — skipping pre-conversion")
+        logging.error("ffmpeg unavailable -- cannot normalize; refusing to analyze raw file")
         return input_path, False
-    
-    # Probe input: codec, resolution, fps
-    needs_conversion = False
-    needs_downscale = False
-    needs_fps_cap = False
-    input_width = 0
-    input_height = 0
-    input_fps = 30.0
-    
+
+    # Probe only for the downscale decision (best-effort; failure is non-fatal,
+    # we normalize regardless).
+    input_width = input_height = 0
     try:
-        probe_result = subprocess.run(
+        probe = subprocess.run(
             ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
-             '-show_entries', 'stream=codec_name,width,height,r_frame_rate',
-             '-of', 'csv=p=0',
-             input_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=15
+             '-show_entries', 'stream=codec_name,width,height,r_frame_rate,avg_frame_rate',
+             '-of', 'csv=p=0', input_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15
         )
-        parts = probe_result.stdout.decode().strip().split(',')
-        
-        if len(parts) >= 4:
-            codec = parts[0].lower()
+        parts = probe.stdout.decode().strip().split(',')
+        if len(parts) >= 3:
             input_width = int(parts[1]) if parts[1].isdigit() else 0
             input_height = int(parts[2]) if parts[2].isdigit() else 0
-            # Parse fps fraction like "60/1"
-            try:
-                fps_parts = parts[3].split('/')
-                input_fps = float(fps_parts[0]) / float(fps_parts[1]) if len(fps_parts) == 2 else float(fps_parts[0])
-            except:
-                input_fps = 30.0
-            
-            needs_conversion = codec not in ('h264', 'libx264')
-            needs_downscale = max(input_width, input_height) > MAX_LONGEST_SIDE
-            needs_fps_cap = input_fps > 32
-            
-            logging.info(f"Video probe: codec={codec}, {input_width}x{input_height}, {input_fps:.1f}fps | "
-                        f"convert={needs_conversion}, downscale={needs_downscale}, fps_cap={needs_fps_cap}")
-        else:
-            # Couldn't parse — force conversion to be safe
-            needs_conversion = True
-            
+        logging.info(f"Video probe: {parts}")
     except Exception as e:
-        logging.warning(f"Could not probe video: {e} — forcing conversion")
-        needs_conversion = True
-    
-    # Skip if nothing needs to change
-    if not needs_conversion and not needs_downscale and not needs_fps_cap:
-        logging.info("Video already optimized — skipping pre-conversion")
-        return input_path, False
-    
-    # Build ffmpeg command
-    converted_path = tempfile.NamedTemporaryFile(delete=False, suffix='_h264.mp4').name
-    
-    ffmpeg_cmd = ['ffmpeg', '-i', input_path]
-    
-    # Video filters: downscale + fps cap
+        logging.warning(f"Probe failed (will still normalize): {e}")
+
+    needs_downscale = max(input_width, input_height) > MAX_LONGEST_SIDE
+
+    out_path = tempfile.NamedTemporaryFile(delete=False, suffix='_cfr_h264.mp4').name
+
     vf_filters = []
-    
     if needs_downscale:
-        # Scale so the LONGEST side is MAX_LONGEST_SIDE, preserving aspect ratio.
-        # -2 ensures dimensions are divisible by 2 (required for H.264).
         if input_height > input_width:
-            # Portrait: long side is height
             vf_filters.append(f"scale=-2:{MAX_LONGEST_SIDE}")
         else:
-            # Landscape: long side is width
             vf_filters.append(f"scale={MAX_LONGEST_SIDE}:-2")
-    
-    if needs_fps_cap:
-        vf_filters.append("fps=30")
-    
-    if vf_filters:
-        ffmpeg_cmd.extend(['-vf', ','.join(vf_filters)])
-    
-    ffmpeg_cmd.extend([
-        '-c:v', 'libx264',
-        '-preset', 'fast',
-        '-crf', '23',
+    vf_filters.append("fps=30")  # force constant 30fps spacing (kills VFR)
+
+    ffmpeg_cmd = [
+        'ffmpeg', '-i', input_path,
+        '-vf', ','.join(vf_filters),
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
         '-pix_fmt', 'yuv420p',
-        '-an',                      # drop audio
-        '-movflags', '+faststart',  # web-friendly MP4
-        '-y',
-        converted_path
-    ])
-    
+        '-r', '30', '-vsync', 'cfr',   # guarantee CFR output
+        '-an', '-movflags', '+faststart', '-y', out_path
+    ]
+
     try:
-        result = subprocess.run(
-            ffmpeg_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=180
+        result = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=180)
+        if result.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            logging.info(
+                f"Normalized to CFR H.264: "
+                f"{os.path.getsize(input_path)/1e6:.1f}MB -> {os.path.getsize(out_path)/1e6:.1f}MB"
+            )
+            return out_path, True
+        logging.error(
+            f"Normalize failed (rc={result.returncode}): "
+            f"{result.stderr.decode()[-500:] if result.stderr else 'no stderr'}"
         )
-        
-        if result.returncode == 0 and os.path.exists(converted_path) and os.path.getsize(converted_path) > 0:
-            # Log the savings
-            orig_size = os.path.getsize(input_path) / (1024 * 1024)
-            new_size = os.path.getsize(converted_path) / (1024 * 1024)
-            logging.info(f"Pre-conversion successful: {orig_size:.1f}MB → {new_size:.1f}MB")
-            return converted_path, True
-        else:
-            stderr_msg = result.stderr.decode()[-500:] if result.stderr else "no stderr"
-            logging.warning(f"Pre-conversion failed (rc={result.returncode}): {stderr_msg}")
-            try:
-                os.unlink(converted_path)
-            except:
-                pass
-            return input_path, False
-            
     except subprocess.TimeoutExpired:
-        logging.warning("Pre-conversion timed out after 180s")
-        try:
-            os.unlink(converted_path)
-        except:
-            pass
-        return input_path, False
+        logging.error("Normalize timed out after 180s")
     except Exception as e:
-        logging.warning(f"Pre-conversion error: {e}")
-        try:
-            os.unlink(converted_path)
-        except:
-            pass
-        return input_path, False
+        logging.error(f"Normalize error: {e}")
+
+    try:
+        os.unlink(out_path)
+    except Exception:
+        pass
+    return input_path, False
 
 # ─────────────────────────────────────────────
 # MAIN APP - Enhanced UI
@@ -3831,8 +3770,8 @@ def main():
         st.session_state.upload_tracked = True
     
     if not FFMPEG_AVAILABLE:
-        st.caption("⚠️ FFmpeg not detected on server — iPhone .MOV files may not process correctly. "
-                   "If your video fails, try converting to MP4 (H.264) before uploading. Max 30 seconds.")
+        st.caption("⚠️ Video processing is unavailable on this server — uploads cannot be analyzed. "
+                   "Please try again later or email your clip to info@swimform-ai.com. Max 30 seconds.")
     else:
         st.caption("✅ All common video formats supported including iPhone recordings (.MOV/HEVC). Max 30 seconds.")
 
@@ -4018,14 +3957,29 @@ def main():
                 conversion_status = st.empty()
 
                 input_path_original = input_path  # keep reference for cleanup
-                input_path, was_converted = preconvert_to_h264(input_path)
+                input_path, ok = preconvert_to_h264(input_path)
 
-                if was_converted:
+                if ok:
                     converted_path = input_path  # track for cleanup
-                    conversion_status.success("✅ Video optimized (converted to H.264, downscaled for performance)")
-                elif not FFMPEG_AVAILABLE:
-                    conversion_status.warning("⚠️ FFmpeg not available — using original file directly. "
-                                              "If analysis fails, the video format may not be supported.")
+                    conversion_status.success("✅ Video normalized to constant-framerate H.264")
+                else:
+                    # FAIL LOUD: never analyze a non-normalized file. VFR / odd
+                    # containers (e.g. raw GoPro) produce confident-but-wrong
+                    # reports, so we reject cleanly instead.
+                    conversion_status.empty()
+                    st.error(
+                        "❌ **Couldn't process this video.** We couldn't normalize it to a "
+                        "format we trust, so we won't run an analysis rather than risk an "
+                        "inaccurate report.\n\n"
+                        "- Re-export as standard **MP4 (H.264)** with HandBrake or VLC\n"
+                        "- For GoPro footage, share a standard MP4 export (not the raw HEVC file)\n"
+                        "- Or email the clip to **info@swimform-ai.com** and we'll run it for you"
+                    )
+                    try:
+                        os.unlink(input_path_original)
+                    except Exception:
+                        pass
+                    st.stop()
 
                 # ── VALIDATE VIDEO CAN BE OPENED ──
                 cap = cv2.VideoCapture(input_path)
