@@ -2053,13 +2053,13 @@ class SwimAnalyzer:
         self.last_breath = -1000
         self.elbow_win = deque(maxlen=9)
         self.time_win = deque(maxlen=9)
-        self.best_dev = float('inf')
-        self.worst_dev = -float('inf')
+        self.best_dev = -1.0       # now tracks best score (higher = better)
+        self.worst_dev = 101.0     # now tracks worst score (lower = worse)
         self.best_bytes = self.worst_bytes = None
         self.best_frame_idx = self.worst_frame_idx = -1
         # Ring buffer of pull frame candidates so we can recover if best/worst collide
         from collections import deque as _deque
-        self._pull_candidates = _deque(maxlen=12)  # (dev, frame_idx, jpeg_bytes)
+        self._pull_candidates = _deque(maxlen=12)  # (score, frame_idx, jpeg_bytes)
         self._pull_frame_counter = 0
 
         # Smoothing buffers
@@ -2564,19 +2564,20 @@ class SwimAnalyzer:
         # we can pick a spread retroactively at finalize time.
         if phase == "Pull":
             self._pull_frame_counter += 1
-            dev = abs(elbow - 110) + horizontal_dev + evf_angle * 0.5
             _, _buf = cv2.imencode('.jpg', frame)
             _jpeg = _buf.tobytes()
-            self._pull_candidates.append((dev, self._pull_frame_counter, _jpeg))
+            # Store (score, frame_idx, jpeg) — rank by score so best/worst
+            # labels match the badge the user sees. Higher score = better.
+            self._pull_candidates.append((score, self._pull_frame_counter, _jpeg))
 
-            if dev < self.best_dev:
-                self.best_dev = dev
+            if score > self.best_dev:  # best_dev sentinel now means best_score
+                self.best_dev = score
                 self.best_bytes = _jpeg
                 self.best_frame_idx = self._pull_frame_counter
 
             # Worst must be a DIFFERENT frame than best
-            if dev > self.worst_dev and self._pull_frame_counter != self.best_frame_idx:
-                self.worst_dev = dev
+            if score < self.worst_dev and self._pull_frame_counter != self.best_frame_idx:
+                self.worst_dev = score
                 self.worst_bytes = _jpeg
                 self.worst_frame_idx = self._pull_frame_counter
 
@@ -2798,11 +2799,11 @@ class SwimAnalyzer:
             and (self.worst_bytes is None or self.worst_frame_idx == self.best_frame_idx)
             and len(self._pull_candidates) > 1
         ):
-            # Find candidate with largest dev that is NOT the best frame
+            # Find candidate with lowest score that is NOT the best frame
             candidates_sorted = sorted(
                 [c for c in self._pull_candidates if c[1] != self.best_frame_idx],
                 key=lambda c: c[0],
-                reverse=True,
+                reverse=False,  # lowest score = worst
             )
             if candidates_sorted:
                 _wdev, _widx, _wjpeg = candidates_sorted[0]
