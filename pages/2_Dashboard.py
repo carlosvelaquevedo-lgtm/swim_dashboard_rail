@@ -4103,6 +4103,52 @@ def main():
 
                 cap.release()
 
+                # ─────────────────────────────────────────────────────────────
+                # COVERAGE GATE — fail loud, same principle as the VFR fix.
+                # A report is only as good as the frames MediaPipe could actually
+                # score. If too little of the clip was trackable, REFUSE to emit a
+                # confident report instead of shipping ~1s dressed up as a full one.
+                # ─────────────────────────────────────────────────────────────
+                MIN_ANALYZED_SECONDS = 2.0    # hard reject below this
+                WARN_ANALYZED_SECONDS = 4.0   # proceed but warn below this
+
+                analyzed_frames = len(analyzer.metrics)
+                total_frames = frame_idx if frame_idx > 0 else 1
+                analyzed_seconds = analyzed_frames / fps if fps and fps > 0 else 0.0
+                coverage_pct = 100.0 * analyzed_frames / total_frames
+
+                if analyzed_seconds < MIN_ANALYZED_SECONDS:
+                    # Discard the half-written video so nothing partial ships.
+                    try:
+                        if use_pyav:
+                            for packet in av_stream.encode():
+                                av_container.mux(packet)
+                            av_container.close()
+                        else:
+                            writer.release()
+                    except Exception:
+                        pass
+                    processing_status.empty()
+                    st.error(
+                        f"❌ **Couldn't analyze enough of this video to give you an honest report.**\n\n"
+                        f"Only **{analyzed_seconds:.1f}s** of the clip ({coverage_pct:.0f}% of frames) had a "
+                        f"trackable stroke — in the rest, the swimmer's arms were underwater, too far away, or "
+                        f"lost in splash. Rather than score a second or two and call it a full analysis, we stopped.\n\n"
+                        f"**For a clean read, re-film with:**\n"
+                        f"- Camera **moving alongside** the swimmer (not filming across the pool)\n"
+                        f"- Swimmer **filling most of the frame** (close, not distant)\n"
+                        f"- A **side angle**, lens ideally right at the waterline\n\n"
+                        f"Or email the clip to **info@swimform-ai.com** and we'll take a look."
+                    )
+                    st.stop()
+
+                if analyzed_seconds < WARN_ANALYZED_SECONDS:
+                    st.warning(
+                        f"⚠️ Heads up: only **{analyzed_seconds:.1f}s** ({coverage_pct:.0f}% of frames) were "
+                        f"clearly trackable, so this report is based on a short sample. Filming closer and "
+                        f"alongside the swimmer gives a more complete analysis."
+                    )
+
                 if use_pyav:
                     # Flush remaining packets
                     for packet in av_stream.encode():
