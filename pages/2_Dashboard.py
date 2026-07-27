@@ -1809,13 +1809,77 @@ def draw_technique_panel_enhanced(frame, origin_x, title, metrics_dict, phase, i
     stxt = "IDEAL REFERENCE" if is_ideal else "YOUR STROKE"
     cv2.putText(frame, stxt, (px+10, py+ph-15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180,180,180), 1)
 
+def draw_skeleton_pro(frame, lm_pixel, elbow_angle, phase):
+    """Broadcast-style skeleton: outlined tapered limbs + joint rings."""
+    ov = frame.copy()
+    P = lambda k: (int(lm_pixel[k][0]), int(lm_pixel[k][1]))
+
+    SEGMENTS = [
+        ("left_shoulder", "right_shoulder", (255, 190, 60), 7),
+        ("left_hip", "right_hip", (255, 190, 60), 7),
+        ("left_shoulder", "left_hip", (255, 190, 60), 6),
+        ("right_shoulder", "right_hip", (255, 190, 60), 6),
+        ("left_shoulder", "left_elbow", (255, 80, 200), 7),
+        ("left_elbow", "left_wrist", (255, 230, 80), 7),
+        ("right_shoulder", "right_elbow", (255, 80, 200), 7),
+        ("right_elbow", "right_wrist", (255, 230, 80), 7),
+        ("left_hip", "left_knee", (120, 255, 120), 7),
+        ("left_knee", "left_ankle", (120, 255, 120), 6),
+        ("right_hip", "right_knee", (120, 255, 120), 7),
+        ("right_knee", "right_ankle", (120, 255, 120), 6),
+    ]
+
+    for a, b, c, t in SEGMENTS:
+        try:
+            cv2.line(ov, P(a), P(b), (15, 15, 25), t + 5, cv2.LINE_AA)
+        except (KeyError, TypeError, ValueError):
+            pass
+    for a, b, c, t in SEGMENTS:
+        try:
+            cv2.line(ov, P(a), P(b), c, t, cv2.LINE_AA)
+        except (KeyError, TypeError, ValueError):
+            pass
+
+    JOINTS = ["left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+              "left_wrist", "right_wrist", "left_hip", "right_hip",
+              "left_knee", "right_knee", "left_ankle", "right_ankle"]
+    for j in JOINTS:
+        try:
+            p = P(j)
+            cv2.circle(ov, p, 8, (15, 15, 25), -1, cv2.LINE_AA)
+            cv2.circle(ov, p, 8, (255, 255, 255), 2, cv2.LINE_AA)
+        except (KeyError, TypeError, ValueError):
+            pass
+
+    cv2.addWeighted(ov, 0.88, frame, 0.12, 0, frame)
+
+    if phase in ("Pull", "Push") and elbow_angle is not None:
+        try:
+            side = "left" if lm_pixel["left_wrist"][1] > lm_pixel["right_wrist"][1] else "right"
+            sh, el, wr = P(side + "_shoulder"), P(side + "_elbow"), P(side + "_wrist")
+            a1 = math.degrees(math.atan2(sh[1] - el[1], sh[0] - el[0]))
+            a2 = math.degrees(math.atan2(wr[1] - el[1], wr[0] - el[0]))
+            if a2 < a1:
+                a1, a2 = a2, a1
+            if a2 - a1 > 180:
+                a1, a2 = a2, a1 + 360
+            arc_c = (80, 255, 120) if 90 <= elbow_angle <= 140 else (60, 160, 255)
+            cv2.ellipse(frame, el, (46, 46), 0, a1, a2, (15, 15, 25), 8, cv2.LINE_AA)
+            cv2.ellipse(frame, el, (46, 46), 0, a1, a2, arc_c, 4, cv2.LINE_AA)
+            txt = f"{elbow_angle:.0f}"
+            tp = (el[0] + 54, el[1] - 10)
+            cv2.putText(frame, txt, tp, cv2.FONT_HERSHEY_SIMPLEX, 1.1, (15, 15, 25), 6, cv2.LINE_AA)
+            cv2.putText(frame, txt, tp, cv2.FONT_HERSHEY_SIMPLEX, 1.1, arc_c, 2, cv2.LINE_AA)
+        except (KeyError, TypeError, ValueError):
+            pass
+
 def draw_overlay_zones(frame, lm_pixel, horizontal_dev, evf_angle, phase):
     """
     Draw color-coded overlay zones on the swimmer
     Green = Good, Amber = OK, Red = Needs Work
     """
     h, w = frame.shape[:2]
-    
+
     # Draw alignment line (shoulder-hip-ankle)
     mid_shoulder = (
         int((lm_pixel["left_shoulder"][0] + lm_pixel["right_shoulder"][0]) / 2),
@@ -1829,28 +1893,23 @@ def draw_overlay_zones(frame, lm_pixel, horizontal_dev, evf_angle, phase):
         int((lm_pixel["left_ankle"][0] + lm_pixel["right_ankle"][0]) / 2),
         int((lm_pixel["left_ankle"][1] + lm_pixel["right_ankle"][1]) / 2)
     )
-    
+
     # Color based on alignment
     align_color = get_zone_color(horizontal_dev, DEFAULT_HORIZONTAL_DEV_GOOD, DEFAULT_HORIZONTAL_DEV_OK)
     # Draw body line
-    cv2.line(frame, mid_shoulder, mid_hip, align_color, 3)
-    cv2.line(frame, mid_hip, mid_ankle, align_color, 3)
-    
+    cv2.line(frame, mid_shoulder, mid_hip, align_color, 2, cv2.LINE_AA)
+    cv2.line(frame, mid_hip, mid_ankle, align_color, 2, cv2.LINE_AA)
+
     # Draw EVF indicator during pull/push
     if phase in ("Pull", "Push"):
         # Find the pulling arm (lower wrist)
         if lm_pixel["left_wrist"][1] > lm_pixel["right_wrist"][1]:
             elbow = (int(lm_pixel["left_elbow"][0]), int(lm_pixel["left_elbow"][1]))
-            wrist = (int(lm_pixel["left_wrist"][0]), int(lm_pixel["left_wrist"][1]))
         else:
             elbow = (int(lm_pixel["right_elbow"][0]), int(lm_pixel["right_elbow"][1]))
-            wrist = (int(lm_pixel["right_wrist"][0]), int(lm_pixel["right_wrist"][1]))
-        
-        evf_color = get_zone_color(evf_angle, DEFAULT_EVF_ANGLE_GOOD, DEFAULT_EVF_ANGLE_OK)
-        cv2.line(frame, elbow, wrist, evf_color, 4)
-        
+
         # Draw ideal vertical line from elbow for reference
-        cv2.line(frame, elbow, (elbow[0], elbow[1] + 80), (100, 100, 100), 2, cv2.LINE_AA)
+        cv2.line(frame, elbow, (elbow[0], elbow[1] + 80), (100, 100, 100), 1, cv2.LINE_AA)
 
 def validate_pose(lm_pixel, frame_bgr, frame_h, frame_w, is_moving=False):
     """Validate that detected pose is actually a human, not a pool lane marking.
@@ -2574,15 +2633,12 @@ class SwimAnalyzer:
             if is_dropped_elbow:
                 self.dropped_elbow_frames += 1
 
-        # Snapshot frame BEFORE dots — used for slow-mo (clean lines only).
-        # Realtime video keeps the dots; slow-mo strips them per coach feedback
-        # (Stephanie Peterson, R3 Endurance).
+        # Snapshot frame before drawing overlay so downstream consumers each get their own copy.
         frame_clean = frame.copy()
 
-        # Draw landmark dots on realtime frame only
-        for lm in landmarks:
-            x, y = int(lm.x * w), int(lm.y * h)
-            cv2.circle(frame, (x, y), 3, (0, 255, 128), -1)
+        # Broadcast-style skeleton overlay on BOTH frames
+        draw_skeleton_pro(frame, lm_pixel, elbow, phase)
+        draw_skeleton_pro(frame_clean, lm_pixel, elbow, phase)
 
         # Draw color-coded overlay zones (lines) on BOTH frames
         draw_overlay_zones(frame, lm_pixel, horizontal_dev, evf_angle, phase)
