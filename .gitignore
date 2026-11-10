@@ -5,3 +5,6 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# Pose models downloaded by benchmark_pose.py
+.pose_models/
