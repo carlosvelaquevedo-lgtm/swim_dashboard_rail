@@ -23,6 +23,19 @@ import gc
 
 from analytics import track
 from ingest import cached_duration, encode_slowmo, release_analysis_resources, write_upload_to_temp
+from payments import retrieve_paid_checkout, valid_session_id
+from results_store import (
+    acquire_lock,
+    load_bytes,
+    load_summary,
+    persistence_enabled,
+    read_meta,
+    release_lock,
+    result_is_saved,
+    send_report_link,
+    write_result,
+)
+import pickle
 
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image as RLImage
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -62,35 +75,53 @@ except ImportError:
     STRIPE_AVAILABLE = False
 
 def verify_stripe_payment(session_id: str) -> bool:
-    """Verify a Stripe Checkout session server-side."""
-    if not STRIPE_AVAILABLE:
+    """Verify a Stripe Checkout session. Sets report_mode from the checkout."""
+    if not STRIPE_AVAILABLE or not valid_session_id(session_id):
         return False
-    try:
-        stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
-        if not stripe.api_key:
-            return False
-        session = stripe.checkout.Session.retrieve(session_id)
-        if session.payment_status == "paid":
-            track("payment_completed", {"session_id": session_id})
-            return True
+    paid, report_mode, email = retrieve_paid_checkout(session_id)
+    if not paid:
         return False
-    except Exception as e:
-        logging.error(f"Stripe verification error: {e}")
-        st.error("Payment verification failed. Please try again or contact info@swimform-ai.com")
-        return False
+    st.session_state["report_mode"] = report_mode
+    if email:
+        st.session_state["customer_email"] = email
+    track("payment_completed", {"session_id": session_id, "report_mode": report_mode})
+    return True
 
-# ── Verify Stripe payment from URL query params ──
-# Each verified session_id is one analysis credit. The credit is CONSUMED at the
-# end of a successful analysis (see end-of-analysis block). Admin tokens grant
-# unlimited credits for the session.
-if not st.session_state.get("paid", False):
-    session_id = st.query_params.get("session_id", "")
+def _payment_session_id() -> str:
+    """The only payment id in the URL is session_id. Older tabs used verified."""
+    sid = st.query_params.get("session_id", "") or ""
+    legacy = st.query_params.get("verified", "") or ""
+    if not sid and valid_session_id(legacy):
+        sid = legacy
+        st.query_params["session_id"] = sid
+        try:
+            st.query_params.pop("verified")
+        except Exception:
+            pass
+    return sid
+
+# ── One session_id is one analysis, once meta.json exists for it ──
+# Admin tokens grant unlimited credits for the browser session.
+_sid = _payment_session_id() or st.session_state.get("active_session_id", "")
+if _sid and not valid_session_id(_sid):
+    st.error("This payment link is not valid.")
+    st.stop()
+
+if _sid and result_is_saved(_sid):
+    _saved_meta = read_meta(_sid) or {}
+    st.session_state["paid"] = False
+    st.session_state["active_session_id"] = _sid
+    st.session_state["saved_session_id"] = _sid
+    st.session_state["is_admin_session"] = False
+    st.session_state["report_mode"] = _saved_meta.get("report_mode", st.session_state.get("report_mode", "swimmer"))
+    st.session_state.setdefault("credit_consumed_for_cache_key", f"saved:{_sid}")
+elif not st.session_state.get("paid", False):
+    session_id = _sid
     admin_key = st.query_params.get("admin_key", "")
 
     if session_id:
-        # Don't re-grant a credit for a session_id that was already consumed
         used = st.session_state.get("consumed_session_ids", set())
-        if session_id in used:
+        if session_id in used and not result_is_saved(session_id):
             st.session_state["paid"] = False
         elif verify_stripe_payment(session_id):
             st.session_state["paid"] = True
@@ -3683,6 +3714,43 @@ def preconvert_to_h264(input_path: str) -> Tuple[str, bool]:
 # MAIN APP - Enhanced UI
 # ─────────────────────────────────────────────
 
+def _hydrate_saved_report():
+    """Load a report that was saved for this session_id into the result cache."""
+    sid = st.session_state.get("saved_session_id")
+    if not sid or "analysis_results" in st.session_state or not result_is_saved(sid):
+        return
+    try:
+        summary = load_summary(sid, {
+            "SessionSummary": SessionSummary,
+            "VideoContext": VideoContext,
+            "FrameMetrics": FrameMetrics,
+            "CameraView": CameraView,
+            "WaterPosition": WaterPosition,
+            "AthleteProfile": AthleteProfile,
+            "SwimPhase": SwimPhase,
+        })
+    except Exception:
+        logging.exception("Could not read the saved report")
+        st.error("The saved report could not be opened. Email info@swimform-ai.com with your payment link.")
+        return
+    context = getattr(summary, "video_context", None)
+    key = st.session_state.get("credit_consumed_for_cache_key")
+    meta = read_meta(sid) or {}
+    st.session_state["analysis_cache_key"] = key
+    st.session_state["analysis_results"] = {
+        "summary": summary,
+        "video_bytes": load_bytes(sid, "video.mp4") or b"",
+        "slowmo_bytes": load_bytes(sid, "slowmo.mp4"),
+        "pdf_buf": io.BytesIO(load_bytes(sid, "report.pdf") or b""),
+        "csv_buf": io.BytesIO(load_bytes(sid, "frames.csv") or b""),
+        "zip_buf": io.BytesIO(load_bytes(sid, "bundle.zip") or b""),
+        "timestamp": meta.get("timestamp", "saved"),
+        "plot_buf": io.BytesIO(load_bytes(sid, "plot.png") or b""),
+        "selected_camera": getattr(context, "camera_view", None),
+        "selected_water": getattr(context, "water_position", None),
+    }
+
+
 def main():
     # Force reset any landing styles
     st.markdown("""
@@ -3754,83 +3822,34 @@ def main():
     </script>
     """, unsafe_allow_html=True)
     
-    # ═══════════════════════════════════════════════════════════════
-    # PAYMENT GATING - Server-side Stripe verification
-    # ═══════════════════════════════════════════════════════════════
-    
-    # Step 1: Check for Stripe redirect with session_id
-    query_params = st.query_params
-    session_id = query_params.get("session_id")
-    
-    if session_id and not st.session_state.get("paid", False):
-        # Verify payment server-side via Stripe API
-        with st.spinner("Verifying payment..."):
-            used = st.session_state.get("consumed_session_ids", set())
-            if session_id in used:
-                st.session_state.paid = False
-            elif verify_stripe_payment(session_id):
-                st.session_state.paid = True
-                st.session_state.stripe_session_id = session_id
-                st.session_state["active_session_id"] = session_id
-                st.session_state["is_admin_session"] = False
-                st.success("Payment verified! Loading dashboard...")
-                # Keep verified session_id in URL so mobile reconnects can recover
-                st.query_params["verified"] = session_id
-                st.query_params.pop("session_id", None)
-            else:
-                st.error("Payment could not be verified. Please try again or contact support.")
-                st.query_params.clear()
-    elif query_params.get("payment") == "cancel":
+    # Payment was already checked before this function, and ?session_id is left as-is.
+    if st.query_params.get("payment") == "cancel":
         st.warning("Payment cancelled. You can try again when you're ready.")
         st.query_params.clear()
-    
-    # Step 2: Block access if not paid (also check for verified param from reconnect)
-    if not st.session_state.get("paid", False):
-        # Try recovering from verified query param (handles mobile browser reconnects)
-        verified_id = query_params.get("verified")
-        if verified_id:
-            used = st.session_state.get("consumed_session_ids", set())
-            if verified_id in used:
-                st.session_state.paid = False
-            elif verify_stripe_payment(verified_id):
-                st.session_state.paid = True
-                st.session_state["active_session_id"] = verified_id
-                st.session_state["is_admin_session"] = False
-                # Continue to dashboard — don't stop
-            else:
-                st.error("Access Denied - Payment session expired. Please purchase again.")
-                st.query_params.clear()
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("Back to Home", use_container_width=True):
-                        st.switch_page("app.py")
-                with col2:
-                    st.link_button("Go to Payment", STRIPE_PAYMENT_LINK, use_container_width=True, type="primary")
-                st.stop()
-    
+
     if (
         not st.session_state.get("paid", False)
         and not st.session_state.get("credit_consumed_for_cache_key")
     ):
         st.error("Access Denied - Please complete payment")
         st.markdown("Please complete payment to access the swim analysis dashboard.")
-        
+
         if not STRIPE_AVAILABLE:
             st.warning("Payment verification is not configured. Set STRIPE_SECRET_KEY in Railway environment variables.")
-        
+
         col1, col2 = st.columns(2)
         with col1:
             if st.button("Back to Home", use_container_width=True):
                 st.switch_page("app.py")
-                
         with col2:
             st.link_button("Go to Payment", STRIPE_PAYMENT_LINK, use_container_width=True, type="primary")
-            
         st.stop()
 
     report_mode = st.session_state.get("report_mode", "swimmer")
     if IS_DEV and not st.session_state.get("report_mode"):
         report_mode = "coach"
+
+    _hydrate_saved_report()
 
     st.title("🏊 Freestyle Swim Technique Analyzer Pro v2")
     st.markdown("AI-powered analysis with **enhanced biomechanical metrics**")
@@ -4084,6 +4103,7 @@ def main():
             else:
               input_path_original = converted_path = out_path = slowmo_out_path = temp_raw_path = None
               cap = av_container = slowmo_container = writer = analyzer = None
+              lock_acquired = False
               try:
                 manual_camera_view = selected_camera
                 manual_water_position = selected_water
@@ -4091,6 +4111,25 @@ def main():
                 if "analysis_tracked" not in st.session_state:
                     track("analysis_started", {"video_type": video_type})
                     st.session_state.analysis_tracked = True
+
+                _pay_sid = st.session_state.get("active_session_id")
+                if (
+                    _pay_sid
+                    and persistence_enabled()
+                    and not st.session_state.get("is_admin_session", False)
+                ):
+                    if result_is_saved(_pay_sid):
+                        st.session_state["saved_session_id"] = _pay_sid
+                        _hydrate_saved_report()
+                        st.info("This payment was already used. Your saved report is below.")
+                        st.stop()
+                    if not acquire_lock(_pay_sid):
+                        st.error(
+                            "An analysis for this payment is already running. "
+                            "If it was interrupted, open the same link again in 15 minutes."
+                        )
+                        st.stop()
+                    lock_acquired = True
 
                 input_path = write_upload_to_temp(uploaded)
 
@@ -4373,10 +4412,43 @@ def main():
                     zip_buf.seek(0)
 
                 # ── Consume the paid credit ──
-                # One Stripe session_id = one completed analysis. Admin sessions are
-                # exempt. After consuming, paid=False so the next upload requires a
-                # fresh Stripe checkout. The cached result is still viewable for
-                # this session via the analysis_cache_key.
+                # The credit is used when meta.json exists, not when the browser
+                # forgets. ?session_id stays in the URL so the same link reopens
+                # the saved report. Admin sessions are exempt.
+                _pay_sid = st.session_state.get("active_session_id")
+                if (
+                    _pay_sid
+                    and persistence_enabled()
+                    and not st.session_state.get("is_admin_session", False)
+                ):
+                    try:
+                        _zip_bytes = zip_buf.getvalue() if zip_buf else b""
+                        write_result(_pay_sid, {
+                            "summary.pkl": pickle.dumps(summary, protocol=4),
+                            "video.mp4": video_bytes,
+                            "slowmo.mp4": slowmo_bytes,
+                            "report.pdf": pdf_buf.getvalue() if pdf_buf else None,
+                            "frames.csv": csv_buf.getvalue() if csv_buf else None,
+                            "bundle.zip": _zip_bytes or None,
+                            "plot.png": plot_buf.getvalue() if plot_buf else None,
+                        }, {
+                            "report_mode": report_mode,
+                            "email": st.session_state.get("customer_email", ""),
+                            "timestamp": timestamp,
+                        })
+                        _email_status = send_report_link(
+                            _pay_sid, st.session_state.get("customer_email", "")
+                        )
+                        if _email_status == "sent":
+                            st.success("We emailed you the link to this report.")
+                        elif _email_status == "sending":
+                            st.warning("The report is saved. The email could not be sent; keep this link.")
+                    except Exception:
+                        logging.exception("Could not save the report")
+                        st.warning(
+                            "The analysis finished, but saving it for this link failed. "
+                            "Download it from this page."
+                        )
                 if not st.session_state.get("is_admin_session", False):
                     _sid = st.session_state.get("active_session_id")
                     if _sid:
@@ -4385,12 +4457,6 @@ def main():
                         st.session_state["consumed_session_ids"] = _used
                     st.session_state["paid"] = False
                     st.session_state["credit_consumed_for_cache_key"] = cache_key
-                    # Strip the session_id from the URL so a refresh doesn't re-verify
-                    try:
-                        st.query_params.pop("session_id", None)
-                        st.query_params.pop("verified", None)
-                    except Exception:
-                        pass
 
                 # Cache all results so reruns (e.g. from download buttons) skip re-processing
                 st.session_state["analysis_cache_key"] = cache_key
@@ -4426,6 +4492,8 @@ def main():
                     analyzer=analyzer,
                     paths=(input_path_original, converted_path, out_path, slowmo_out_path, temp_raw_path),
                 )
+                if lock_acquired:
+                    release_lock(st.session_state.get("active_session_id"))
 
 
         # === DISPLAY RESULTS (runs from cache or fresh) ===
