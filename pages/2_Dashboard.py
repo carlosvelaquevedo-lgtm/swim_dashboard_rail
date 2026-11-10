@@ -22,6 +22,7 @@ import shutil
 import gc
 
 from analytics import track
+from ingest import cached_duration, encode_slowmo, release_analysis_resources, write_upload_to_temp
 
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image as RLImage
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -3947,7 +3948,7 @@ def main():
             type=["mp4", "mov", "avi", "MOV", "MP4", "AVI", "m4v", "M4V"],
         )
     if uploaded and "upload_tracked" not in st.session_state:
-        track("video_uploaded", {"filename": uploaded.name, "size_mb": round(len(uploaded.getvalue()) / (1024 * 1024), 1)})
+        track("video_uploaded", {"filename": uploaded.name, "size_mb": round(uploaded.size / (1024 * 1024), 1)})
         st.session_state.upload_tracked = True
     
     if not FFMPEG_AVAILABLE:
@@ -3956,43 +3957,18 @@ def main():
     else:
         st.caption("✅ All common video formats supported including iPhone recordings (.MOV/HEVC). Max 30 seconds.")
 
-    if uploaded and len(uploaded.getvalue()) > 100 * 1024 * 1024:
+    if uploaded and uploaded.size > 100 * 1024 * 1024:
         st.error("Video must be under 100MB. Please trim your clip.")
         st.stop()
 
     # ── DURATION LIMIT: 30 seconds max ──
+    # Probed once per upload. The video-type radio reruns this script, and the
+    # cached duration means that rerun does not write a temp file or call ffprobe.
     MAX_DURATION_SECONDS = 30
 
     if uploaded:
-        # Write to temp file so ffprobe can check duration
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as _tmp_dur:
-            _tmp_dur.write(uploaded.getvalue())
-            _tmp_dur_path = _tmp_dur.name
-
-        # Reset the uploaded file buffer so it can be read again later
-        uploaded.seek(0)
-
-        video_duration = None
-        if FFMPEG_AVAILABLE:
-            try:
-                dur_result = subprocess.run(
-                    ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
-                     '-show_entries', 'format=duration',
-                     '-of', 'csv=p=0',
-                     _tmp_dur_path],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=15
-                )
-                video_duration = float(dur_result.stdout.decode().strip())
-            except Exception:
-                video_duration = None
-
-        # Clean up temp file (the real temp file is created later during processing)
-        try:
-            os.unlink(_tmp_dur_path)
-        except Exception:
-            pass
+        _duration_cache = st.session_state.setdefault("probed_durations", {})
+        video_duration = cached_duration(_duration_cache, uploaded, FFMPEG_AVAILABLE)
 
         if video_duration is not None and video_duration > MAX_DURATION_SECONDS:
             st.error(
@@ -4003,7 +3979,7 @@ def main():
             st.stop()
 
     if uploaded:
-        file_size_mb = len(uploaded.getvalue()) / (1024 * 1024)
+        file_size_mb = uploaded.size / (1024 * 1024)
         st.success(f"✅ Video uploaded: **{uploaded.name}** ({file_size_mb:.1f} MB)")
 
     st.divider()
@@ -4091,7 +4067,7 @@ def main():
     if (uploaded and video_type) or _cache_only_mode:
         if not _cache_only_mode:
             # Use a cache key based on file name + size to detect new uploads
-            cache_key = f"{uploaded.name}_{len(uploaded.getvalue())}"
+            cache_key = f"{uploaded.name}_{uploaded.size}"
 
             if st.session_state.get("analysis_cache_key") == cache_key and "analysis_results" in st.session_state:
                 # Reuse cached results — do NOT re-process
@@ -4106,6 +4082,8 @@ def main():
                 selected_camera = cached["selected_camera"]
                 selected_water = cached["selected_water"]
             else:
+              input_path_original = converted_path = out_path = slowmo_out_path = temp_raw_path = None
+              cap = av_container = slowmo_container = writer = analyzer = None
               try:
                 manual_camera_view = selected_camera
                 manual_water_position = selected_water
@@ -4114,9 +4092,7 @@ def main():
                     track("analysis_started", {"video_type": video_type})
                     st.session_state.analysis_tracked = True
 
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_in:
-                    tmp_in.write(uploaded.getvalue())
-                    input_path = tmp_in.name
+                input_path = write_upload_to_temp(uploaded)
 
                 # Auto-pick Heavy model when the SOURCE video was HD or larger.
                 _src_w, _src_h = _probe_video_dimensions(input_path)
@@ -4156,10 +4132,6 @@ def main():
                         "- For GoPro footage, share a standard MP4 export (not the raw HEVC file)\n"
                         "- Or email the clip to **info@swimform-ai.com** and we'll run it for you"
                     )
-                    try:
-                        os.unlink(input_path_original)
-                    except Exception:
-                        pass
                     st.stop()
 
                 # ── VALIDATE VIDEO CAN BE OPENED ──
@@ -4177,13 +4149,6 @@ def main():
                              "- Convert to MP4 (H.264) using a free tool like HandBrake or VLC\n"
                              "- Record using your phone's camera app instead of screen recording\n"
                              "- Contact info@swimform-ai.com for help")
-                    # Cleanup
-                    try:
-                        os.unlink(input_path_original)
-                        if converted_path:
-                            os.unlink(converted_path)
-                    except:
-                        pass
                     st.stop()
 
                 fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -4198,12 +4163,6 @@ def main():
                         cap.release()
                         st.error("❌ **Video file appears to be empty or unreadable.** "
                                  "Please try a different video or convert to MP4 (H.264).")
-                        try:
-                            os.unlink(input_path_original)
-                            if converted_path:
-                                os.unlink(converted_path)
-                        except:
-                            pass
                         st.stop()
                     # If we could read a frame but metadata was wrong, re-get info
                     h_frame, w_frame = frame_test.shape[:2]
@@ -4216,7 +4175,7 @@ def main():
 
                 # --- OUTPUT VIDEO SETUP (PyAV preferred, OpenCV+FFmpeg fallback) ---
                 out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-                slowmo_out_path = tempfile.NamedTemporaryFile(delete=False, suffix="_slowmo.mp4").name
+                slowmo_out_path = None
                 temp_raw_path = None  # Only used in fallback path
                 use_pyav = PYAV_AVAILABLE
                 slowmo_container = None
@@ -4234,17 +4193,19 @@ def main():
                         'crf': '23',
                         'movflags': '+faststart',
                     }
-                    # Slow-mo (0.5x) — coach feedback: full speed is too fast to follow lines
-                    slowmo_container = av.open(slowmo_out_path, mode='w')
-                    slowmo_stream = slowmo_container.add_stream('libx264', rate=max(int(fps / 2), 1))
-                    slowmo_stream.width = w
-                    slowmo_stream.height = h
-                    slowmo_stream.pix_fmt = 'yuv420p'
-                    slowmo_stream.options = {
-                        'preset': 'fast',
-                        'crf': '23',
-                        'movflags': '+faststart',
-                    }
+                    # Slow-mo is coach-only. Swimmer reports never show it.
+                    if encode_slowmo(report_mode):
+                        slowmo_out_path = tempfile.NamedTemporaryFile(delete=False, suffix="_slowmo.mp4").name
+                        slowmo_container = av.open(slowmo_out_path, mode='w')
+                        slowmo_stream = slowmo_container.add_stream('libx264', rate=max(int(fps / 2), 1))
+                        slowmo_stream.width = w
+                        slowmo_stream.height = h
+                        slowmo_stream.pix_fmt = 'yuv420p'
+                        slowmo_stream.options = {
+                            'preset': 'fast',
+                            'crf': '23',
+                            'movflags': '+faststart',
+                        }
                 else:
                     # Fallback: OpenCV raw AVI → FFmpeg re-encode
                     temp_raw_path = tempfile.NamedTemporaryFile(delete=False, suffix=".avi").name
@@ -4271,9 +4232,10 @@ def main():
                         for packet in av_stream.encode(av_frame):
                             av_container.mux(packet)
                         # Slow-mo: NO dots (clean lines only — coach feedback)
-                        slowmo_frame = av.VideoFrame.from_ndarray(annotated_clean, format='bgr24')
-                        for packet in slowmo_stream.encode(slowmo_frame):
-                            slowmo_container.mux(packet)
+                        if slowmo_container is not None:
+                            slowmo_frame = av.VideoFrame.from_ndarray(annotated_clean, format='bgr24')
+                            for packet in slowmo_stream.encode(slowmo_frame):
+                                slowmo_container.mux(packet)
                     else:
                         writer.write(annotated)
 
@@ -4335,9 +4297,10 @@ def main():
                     for packet in av_stream.encode():
                         av_container.mux(packet)
                     av_container.close()
-                    for packet in slowmo_stream.encode():
-                        slowmo_container.mux(packet)
-                    slowmo_container.close()
+                    if slowmo_container is not None:
+                        for packet in slowmo_stream.encode():
+                            slowmo_container.mux(packet)
+                        slowmo_container.close()
                     processing_status.text("✅ Analysis complete!")
                 else:
                     writer.release()
@@ -4384,7 +4347,7 @@ def main():
                 with open(out_path, 'rb') as f:
                     video_bytes = f.read()
                 slowmo_bytes = None
-                if use_pyav and os.path.exists(slowmo_out_path):
+                if use_pyav and slowmo_out_path and os.path.exists(slowmo_out_path):
                     with open(slowmo_out_path, 'rb') as f:
                         slowmo_bytes = f.read()
 
@@ -4444,21 +4407,6 @@ def main():
                     "selected_water": selected_water,
                 }
 
-                # CLEANUP TEMP FILES (after everything is processed)
-                try:
-                    os.unlink(input_path_original)
-                    os.unlink(out_path)
-                    if os.path.exists(slowmo_out_path):
-                        os.unlink(slowmo_out_path)
-                    if temp_raw_path and os.path.exists(temp_raw_path):
-                        os.unlink(temp_raw_path)
-                    if converted_path and converted_path != input_path_original:
-                        os.unlink(converted_path)
-                except:
-                    pass
-
-                analyzer.close()
-
               except Exception as e:
                 import traceback
                 tb_str = traceback.format_exc()
@@ -4467,6 +4415,17 @@ def main():
                          "Please try a different clip or contact info@swimform-ai.com")
                 with st.expander("🔍 Debug Details (click to expand)"):
                     st.code(tb_str, language="python")
+              finally:
+                # st.stop() raises BaseException, so this still runs on every
+                # reject path. Handles are closed before any temp file is deleted.
+                release_analysis_resources(
+                    cap=cap,
+                    av_container=av_container,
+                    slowmo_container=slowmo_container,
+                    writer=writer,
+                    analyzer=analyzer,
+                    paths=(input_path_original, converted_path, out_path, slowmo_out_path, temp_raw_path),
+                )
 
 
         # === DISPLAY RESULTS (runs from cache or fresh) ===
