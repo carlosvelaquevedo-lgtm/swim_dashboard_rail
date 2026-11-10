@@ -4,11 +4,20 @@ import base64
 import json
 import os
 from html import escape as html_escape
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from analytics import track
 
 load_dotenv()
+
+
+def _with_prefill(url: str) -> str:
+    email = str(st.session_state.get("prefill_email", "") or "").strip()
+    if not email or "@" not in email or " " in email or len(email) > 200:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}prefilled_email={quote(email)}"
 
 
 def _add_utm(url: str, content: str) -> str:
@@ -541,6 +550,10 @@ def show_landing_page():
 # =============================================
 q = st.query_params
 
+_prefill = str(q.get("prefill_email", "") or "").strip()
+if _prefill and "@" in _prefill and " " not in _prefill and len(_prefill) <= 200:
+    st.session_state["prefill_email"] = _prefill
+
 # Admin bypass (secret token in URL)
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 ADMIN_TOKEN_2 = os.environ.get("ADMIN_TOKEN_2", "")
@@ -578,7 +591,7 @@ if checkout_tier in ("swimmer", "coach"):
             {"tier": "coach", "price": "6.99", "destination": "stripe"},
         )
     st.query_params.clear()
-    _redirect_to_external(dest)
+    _redirect_to_external(_with_prefill(dest))
     st.stop()
 
 if "session_id" in q and not st.session_state.paid:
