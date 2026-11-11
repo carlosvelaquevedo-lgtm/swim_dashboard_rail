@@ -4642,8 +4642,12 @@ def main():
                 # forgets. ?session_id stays in the URL so the same link reopens
                 # the saved report. Admin sessions are exempt.
                 _pay_sid = st.session_state.get("active_session_id")
+                normalization_ok = ok
+                coverage_ok = analyzed_seconds >= MIN_ANALYZED_SECONDS
+                # True only when the framing check blocked and the user did not click Analyze anyway.
+                framing_blocked = framing_blocks
                 if (
-                    should_persist_report(True, True, framing_blocked=False)
+                    should_persist_report(normalization_ok, coverage_ok, framing_blocked=framing_blocked)
                     and _pay_sid
                     and persistence_enabled()
                     and not st.session_state.get("is_admin_session", False)

@@ -227,6 +227,32 @@ class TrackingGeometryTests(unittest.TestCase):
         self.assertFalse(pre.should_persist_report(True, True, framing_blocked=True))
         self.assertTrue(pre.should_persist_report(True, True))
 
+    def test_write_is_gated_by_the_persist_helper(self):
+        def attempt(normalized_ok, coverage_ok, framing_blocked=False):
+            written = []
+            if pre.should_persist_report(
+                normalized_ok, coverage_ok, framing_blocked=framing_blocked
+            ):
+                written.append("meta")
+            return written
+
+        self.assertFalse(pre.should_persist_report(False, True))
+        self.assertEqual(attempt(False, True), [])
+        self.assertFalse(pre.should_persist_report(True, False))
+        self.assertEqual(attempt(True, False), [])
+        self.assertFalse(pre.should_persist_report(True, True, framing_blocked=True))
+        self.assertEqual(attempt(True, True, True), [])
+        self.assertEqual(attempt(True, True, False), ["meta"])
+
+        dashboard = os.path.join(os.path.dirname(__file__), "..", "pages", "2_Dashboard.py")
+        with open(dashboard, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertIn(
+            "should_persist_report(normalization_ok, coverage_ok, framing_blocked=framing_blocked)",
+            source,
+        )
+        self.assertNotIn("should_persist_report(True, True, framing_blocked=False)", source)
+
     def test_framing_verdict_uses_the_largest_sample(self):
         self.assertEqual(pre.framing_verdict([None, None, None]), "skipped")
         self.assertEqual(pre.framing_verdict([0.0, 0.0]), "no_swimmer")
