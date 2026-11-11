@@ -1,0 +1,59 @@
+name: tests
+
+on:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright chromium for the viewer test
+        if: ${{ hashFiles('tests/test_viewer_real_stroke.py') != '' }}
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+          echo "CHROME_PATH=$(python -c 'from playwright.sync_api import sync_playwright
+p = sync_playwright().start()
+print(p.chromium.executable_path)
+p.stop()')" >> "$GITHUB_ENV"
+
+      - name: Run tests that exist on this branch
+        run: |
+          shopt -s nullglob
+          files=(tests/test_*.py)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No tests/test_*.py on this branch."
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            python "$f"
+          done
+
+      - name: Compile present entry points
+        run: |
+          files=()
+          for f in app.py ingest.py video_preflight.py payments.py pages/*.py; do
+            if [ -f "$f" ]; then
+              files+=("$f")
+            fi
+          done
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No listed Python files to compile."
+            exit 0
+          fi
+          python -m py_compile "${files[@]}"
+
+      - name: Reject heavy top-level imports
+        run: python .github/scripts/import_guard.py

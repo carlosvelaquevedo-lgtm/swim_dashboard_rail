@@ -41,14 +41,8 @@ except ImportError:
 # MEDIAPIPE TASKS API
 # ─────────────────────────────────────────────
 
-try:
-    import mediapipe as mp
-    from mediapipe.tasks import python
-    from mediapipe.tasks.python import vision
-    MEDIAPIPE_TASKS_AVAILABLE = True
-except ImportError:
-    MEDIAPIPE_TASKS_AVAILABLE = False
-    st.error("MediaPipe Tasks not installed → pip install mediapipe>=0.10.0")
+# This file is not the running app. MediaPipe is allowed only in pages/2_Dashboard.py.
+MEDIAPIPE_TASKS_AVAILABLE = False
 
 # ─────────────────────────────────────────────
 # CUSTOM CSS - Enhanced for new UI
