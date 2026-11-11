@@ -7,6 +7,7 @@ sizes; which one ships is decided by running both on the two test clips.
 
 This file has not been executed on a GPU or on a swim clip.
 """
+import hmac
 import os
 
 from modal_3d.canonical import (
@@ -380,13 +381,39 @@ def _lift_window(lifter, window):
     return ((pred[0] + pred[1]) * 0.5).astype(np.float32)
 
 
+def lift_auth_status(authorization, expected):
+    """401 when the bearer token is missing or wrong. None means the token matches."""
+    if not expected or not isinstance(authorization, str):
+        return 401
+    prefix = "Bearer "
+    if not authorization.startswith(prefix):
+        return 401
+    token = authorization[len(prefix):]
+    if not token:
+        return 401
+    try:
+        matches = hmac.compare_digest(token, expected)
+    except (TypeError, ValueError):
+        return 401
+    return None if matches else 401
+
+
+def _unauthorized_response():
+    body = {"ok": False, "error": "unauthorized"}
+    try:
+        from fastapi.responses import JSONResponse
+    except ImportError:
+        from starlette.responses import JSONResponse
+    return JSONResponse(body, status_code=401)
+
+
 async def _http_lift(lifter, request):
     import json
     import tempfile
     auth = request.headers.get("authorization", "")
     expected = os.environ.get("MODAL_3D_TOKEN", "")
-    if not expected or auth != f"Bearer {expected}":
-        return {"ok": False, "error": "unauthorized"}
+    if lift_auth_status(auth, expected):
+        return _unauthorized_response()
     payload = await request.json()
     import base64
     raw = base64.b64decode(payload.get("video_b64") or "")

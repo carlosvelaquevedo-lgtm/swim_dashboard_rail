@@ -37,9 +37,9 @@ WRIST_OUTLIER_FRACTION = 0.02
 def _detected_mask(scores):
     scores = np.asarray(scores, dtype=float)
     torso = scores[..., list(TORSO)].mean(axis=-1)
-    arm_l = scores[..., list(ARM_L)].min(axis=-1)
-    arm_r = scores[..., list(ARM_R)].min(axis=-1)
-    return (torso >= TORSO_CONF_MIN) & (np.maximum(arm_l, arm_r) >= ARM_CONF_MIN)
+    # Any one shoulder, elbow, or wrist is enough. A whole arm is not required.
+    arm = scores[..., list(ARM_L + ARM_R)].max(axis=-1)
+    return (torso >= TORSO_CONF_MIN) & (arm >= ARM_CONF_MIN)
 
 
 def _bone_lengths(joints):
