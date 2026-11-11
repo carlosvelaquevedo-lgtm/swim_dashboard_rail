@@ -1,11 +1,11 @@
 """Headless Chrome check that a real stroke drives the viewer.
 
-Skips when Chrome is not installed, so a CPU-only CI run still passes.
+Resolves Chrome from CHROME_PATH, then from Playwright's bundled chromium.
+Fails when neither browser is installed.
 """
 import os
 import unittest
 
-CHROME = "/usr/local/bin/google-chrome"
 HTML = os.path.join(os.path.dirname(__file__), "..", "viewer", "swimform_freestyle_3d.html")
 
 INIT = r"""
@@ -36,23 +36,68 @@ window.__REAL_STROKE_3D__ = (function () {
 })();
 """
 
+CAPTIONS = """() => {
+  function row(sel) {
+    const el = document.querySelector(sel);
+    if (!el) return {present: false, hidden: true, text: ''};
+    const style = getComputedStyle(el);
+    const hidden = style.display === 'none' || style.visibility === 'hidden' || !!el.hidden;
+    return {present: true, hidden: hidden, text: el.textContent || ''};
+  }
+  return {
+    pill: row('.top-pill-container'),
+    subtitle: row('.intro-bar p'),
+    heading: row('.panel-card .panel-sub')
+  };
+}"""
+
+
+def resolve_chrome():
+    """CHROME_PATH when that file exists, otherwise Playwright's chromium."""
+    env = os.environ.get("CHROME_PATH", "").strip()
+    if env and os.path.isfile(env):
+        return env
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return None
+    with sync_playwright() as playwright:
+        path = playwright.chromium.executable_path
+    if path and os.path.isfile(path):
+        return path
+    return None
+
 
 class ViewerRealStrokeTests(unittest.TestCase):
+    def _captions(self, page):
+        return page.evaluate(CAPTIONS)
+
+    def _assert_modeled_copy(self, page, hidden):
+        rows = self._captions(page)
+        for name, row in rows.items():
+            self.assertTrue(row["present"], name)
+            self.assertEqual(row["hidden"], hidden, name)
+        if not hidden:
+            self.assertIn("Dropped elbow", rows["pill"]["text"])
+            self.assertIn("A modeled stroke with four common faults", rows["subtitle"]["text"])
+            self.assertIn("one full stroke loop", rows["heading"]["text"])
+
     def test_real_stroke_plays_and_switches_mode(self):
-        if not os.path.exists(CHROME) or not os.path.exists(HTML):
-            self.skipTest("chrome or the built viewer is not on this machine")
+        chrome = resolve_chrome()
+        if not chrome:
+            self.fail("No Chrome found. Set CHROME_PATH or install Playwright chromium.")
+        if not os.path.exists(HTML):
+            self.fail("Built viewer is missing: " + HTML)
         from playwright.sync_api import sync_playwright
 
         errors = []
+        launch_args = [
+            "--use-gl=angle", "--use-angle=swiftshader",
+            "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist",
+            "--allow-file-access-from-files",
+        ]
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
-                executable_path=CHROME,
-                args=[
-                    "--use-gl=angle", "--use-angle=swiftshader",
-                    "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist",
-                    "--allow-file-access-from-files",
-                ],
-            )
+            browser = playwright.chromium.launch(executable_path=chrome, args=launch_args)
             page = browser.new_page(viewport={"width": 1400, "height": 900})
             page.add_init_script(INIT)
             page.on("pageerror", lambda err: errors.append(str(err)))
@@ -65,14 +110,27 @@ class ViewerRealStrokeTests(unittest.TestCase):
             self.assertIn("°", elbow)
             report = page.inner_text("#report-body")
             self.assertIn("°", report)
+            self._assert_modeled_copy(page, True)
             page.click("#mode-target")
             page.wait_for_timeout(300)
             self.assertEqual(page.evaluate("window.__swimform.state.mode"), "target")
+            self._assert_modeled_copy(page, False)
             page.click("#mode-side")
             page.wait_for_timeout(200)
             self.assertEqual(page.evaluate("window.__swimform.state.mode"), "side")
+            self._assert_modeled_copy(page, True)
             page.click("#mode-real")
             self.assertIsNotNone(page.evaluate("window.__swimform.sampleRealPose(0.1)"))
+            self._assert_modeled_copy(page, True)
+
+            demo = browser.new_page(viewport={"width": 1400, "height": 900})
+            demo.goto("file://" + os.path.abspath(HTML))
+            demo.wait_for_function(
+                "document.getElementById('ref-pill').textContent.length > 0",
+                timeout=60000,
+            )
+            self.assertIsNone(demo.evaluate("window.__swimform.state.mode"))
+            self._assert_modeled_copy(demo, False)
             browser.close()
         self.assertEqual(errors, [])
 
