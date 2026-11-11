@@ -276,6 +276,11 @@
         <div class="brand-name">SWIMFORM AI</div>
       </div>
       <div class="topbar-controls">
+        <span id="real-modes" hidden>
+          <button id="mode-real" class="btn primary" type="button">My Real Stroke</button>
+          <button id="mode-side" class="btn" type="button">Side-by-Side (My Stroke vs Target)</button>
+          <button id="mode-target" class="btn" type="button">Target Form</button>
+        </span>
         <button id="btn-coach-cut" class="btn primary active" type="button"><span id="coach-cut-label">Coach cut playing</span></button>
         <label class="toggle-pill" for="export-range">Reel
           <select id="export-range">
@@ -388,17 +393,19 @@
           <h2>Stroke report</h2>
           <p class="panel-sub">Measured on the 3D body across one full stroke loop.</p>
           <table class="report-table">
-            <thead><tr><th>Check</th><th>You</th><th>Target</th></tr></thead>
+            <thead id="report-head"><tr><th>Check</th><th>You</th><th>Target</th></tr></thead>
             <tbody id="report-body"></tbody>
           </table>
-          <p class="table-footnote">Modeled demo stroke. Targets are coaching guidelines, not lab norms.</p>
+          <p class="table-footnote" id="report-note">Modeled demo stroke. Targets are coaching guidelines, not lab norms.</p>
         </div>
 
         <div class="note-banner">
           <div><strong>Why two elbow numbers?</strong> A side camera flattens the stroke, so it reads a different elbow angle than the real one in 3D. The readouts on the stage show both, live.</div>
           <div><strong>Use another character.</strong> Drop a Mixamo-rigged .glb onto the stage, or pick a file. Mixamo-rigged characters only.</div>
           <div><button id="btn-upload" class="btn" type="button">Load Mixamo character (.glb)</button>
-            <input id="glb-file-input" type="file" accept=".glb" style="display:none" /></div>
+            <input id="glb-file-input" type="file" accept=".glb" style="display:none" />
+            <button id="btn-stroke" class="btn" type="button">Load stroke3d.json</button>
+            <input id="stroke-file-input" type="file" accept=".json,application/json" style="display:none" /></div>
         </div>
       </aside>
     </main>
@@ -5473,7 +5480,11 @@
   const REF_TORSO = 0.47;   // hips-to-neck length (m) of the body the trunks pattern was drawn for
   const swimmerRoot = new THREE.Group();
   scene.add(swimmerRoot);
+  const targetRoot = new THREE.Group();
+  targetRoot.visible = false;
+  scene.add(targetRoot);
   let rig = null;
+  let targetRig = null;
 
   function buildRig(gltfScene) {
     const bones = {};
@@ -5562,6 +5573,13 @@
     return { holder, bones, drive, hipsRest, restBasis, scale, restTorso, restArm, torsoLen: restTorso * scale, palmSign, trunks };
   }
 
+  function useTargetRig(newRig) {
+    if (targetRig) targetRoot.remove(targetRig.holder);
+    targetRig = newRig;
+    targetRoot.add(targetRig.holder);
+    targetRoot.visible = state.mode === 'side';
+  }
+
   function useRig(newRig) {
     if (rig) swimmerRoot.remove(rig.holder);
     rig = newRig;
@@ -5575,6 +5593,7 @@
     fillReport(res.report);
     window.__swimformCheck = res;
     document.body.dataset.check = JSON.stringify(res);
+    if (state.realData) rebuildRealReport();
   }
 
   const _qp = new THREE.Quaternion(), _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
@@ -5802,6 +5821,9 @@
     coachCut: true,
     playing: true,
     speed: 1,
+    mode: null,
+    realData: null,
+    realTime: 0,
     reel: false,
     showOverlay: true,
     manualCam: null,     // key of VIEWS when a camera button is held
@@ -5859,12 +5881,28 @@
   function stopCoachCut() { if (state.coachCut) { state.coachCut = false; renderStepUI(); } }
 
   document.getElementById('btn-coach-cut').addEventListener('click', () => {
+    if (state.mode) {
+      state.mode = null;
+      state.coachCut = true;
+      targetRoot.visible = false;
+      swimmerRoot.position.z = 0;
+      $('step-strip').style.display = '';
+      ['mode-real', 'mode-side', 'mode-target'].forEach((id) => $(id).classList.remove('primary'));
+      state.playing = true;
+      goToStep(state.stepIndex, state.tau % STEP_SECONDS);
+      return;
+    }
     state.coachCut = !state.coachCut;
     if (state.coachCut) { state.playing = true; goToStep(state.stepIndex, state.tau % STEP_SECONDS); }
     else renderStepUI();
   });
   document.getElementById('btn-play').addEventListener('click', () => { state.playing = !state.playing; renderStepUI(); });
   document.getElementById('scrubber').addEventListener('input', (e) => {
+    if (state.realData && state.mode) {
+      state.playing = false;
+      state.realTime = (parseFloat(e.target.value) / 1000) * realDuration();
+      return;
+    }
     const T = Math.min(TOTAL_SECONDS - 1e-3, (parseFloat(e.target.value) / 1000) * TOTAL_SECONDS);
     state.playing = false;
     goToStep(Math.floor(T / STEP_SECONDS), T % STEP_SECONDS);
@@ -6063,11 +6101,15 @@
       const bin = atob(b64);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      gltfLoader.parse(bytes.buffer, '', (gltf) => {
+      gltfLoader.parse(bytes.buffer.slice(0), '', (gltf) => {
         const r = buildRig(gltf.scene);
         if (!r) { showStageMessage("Couldn't load the swimmer model", true); return; }
         useRig(r);
         showStageMessage('');
+        gltfLoader.parse(bytes.buffer.slice(0), '', (gltf2) => {
+          const second = buildRig(gltf2.scene);
+          if (second) useTargetRig(second);
+        });
       }, (err) => { console.error(err); showStageMessage("Couldn't load the swimmer model", true); });
     } catch (err) {
       console.error(err);
@@ -6091,11 +6133,151 @@
   }
   $('btn-upload').addEventListener('click', () => $('glb-file-input').click());
   $('glb-file-input').addEventListener('change', (e) => { loadCustomCharacter(e.target.files && e.target.files[0]); e.target.value = ''; });
+  $('btn-stroke').addEventListener('click', () => $('stroke-file-input').click());
+  $('stroke-file-input').addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (file) file.text().then(loadRealText).catch(() => toast('That stroke file could not be read.'));
+    e.target.value = '';
+  });
   window.addEventListener('dragover', (e) => e.preventDefault());
-  window.addEventListener('drop', (e) => { e.preventDefault(); loadCustomCharacter(e.dataTransfer.files && e.dataTransfer.files[0]); });
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!file) return;
+    if (/\.json$/i.test(file.name)) file.text().then(loadRealText).catch(() => toast('That stroke file could not be read.'));
+    else loadCustomCharacter(file);
+  });
 
   // ===========================================================================
-  // 8. REEL EXPORT: records one pass of the coach cut as a 1080x1920 video
+  // 7b. REAL STROKE: a stroke3d.json pose, played on the same rig
+  // ===========================================================================
+  function vec3(value) {
+    if (value && value.isVector3) return value.clone();
+    return V(value && value.x || 0, value && value.y || 0, value && value.z || 0);
+  }
+  function lerpVec(a, b, u) {
+    return vec3(a).lerp(vec3(b), u);
+  }
+  function hydratePose(frame) {
+    const pose = {
+      pelvis: vec3(frame.pelvis), neck: vec3(frame.neck), a: vec3(frame.a).normalize(),
+      shF: { right: vec3(frame.shF.right).normalize(), dorsal: vec3(frame.shF.dorsal).normalize() },
+      hipF: { right: vec3(frame.hipF.right).normalize(), dorsal: vec3(frame.hipF.dorsal).normalize() },
+      headRoll: frame.headRoll || 0, roll: frame.roll || 0, hipRoll: frame.hipRoll || 0,
+      arms: {}, legs: {}
+    };
+    ['L', 'R'].forEach((side) => {
+      const arm = frame.arms[side], leg = frame.legs[side];
+      pose.arms[side] = {
+        S: vec3(arm.S), E: vec3(arm.E), W: vec3(arm.W), pole: vec3(arm.pole).normalize(),
+        wBack: arm.wBack || 0, wRelax: arm.wRelax || 0, wDown: arm.wDown == null ? 1 : arm.wDown
+      };
+      pose.legs[side] = { thigh: vec3(leg.thigh).normalize(), shin: vec3(leg.shin).normalize() };
+    });
+    return pose;
+  }
+  function sampleRealPose(t) {
+    const data = state.realData;
+    if (!data || !data.frames || !data.frames.length) return null;
+    const fps = data.fps || 30;
+    const n = data.frames.length;
+    const wrapped = ((t * fps) % n + n) % n;
+    const i0 = Math.floor(wrapped) % n;
+    const i1 = (i0 + 1) % n;
+    const u = wrapped - Math.floor(wrapped);
+    if (u < 1e-4) return hydratePose(data.frames[i0]);
+    const a = data.frames[i0], b = data.frames[i1];
+    const pose = hydratePose(a);
+    pose.pelvis.lerp(vec3(b.pelvis), u);
+    pose.neck.lerp(vec3(b.neck), u);
+    pose.a.lerp(vec3(b.a), u).normalize();
+    pose.roll += ((b.roll || 0) - (a.roll || 0)) * u;
+    pose.hipRoll += ((b.hipRoll || 0) - (a.hipRoll || 0)) * u;
+    pose.headRoll += ((b.headRoll || 0) - (a.headRoll || 0)) * u;
+    ['L', 'R'].forEach((side) => {
+      const arm = pose.arms[side], other = b.arms[side];
+      arm.S.lerp(vec3(other.S), u); arm.E.lerp(vec3(other.E), u); arm.W.lerp(vec3(other.W), u);
+      arm.pole.lerp(vec3(other.pole), u).normalize();
+      pose.legs[side].thigh.lerp(vec3(b.legs[side].thigh), u).normalize();
+      pose.legs[side].shin.lerp(vec3(b.legs[side].shin), u).normalize();
+    });
+    return pose;
+  }
+  function realDuration() {
+    const data = state.realData;
+    if (!data) return 0;
+    if (data.duration_s) return data.duration_s;
+    return data.frames.length / (data.fps || 30);
+  }
+  function setViewMode(mode) {
+    state.mode = mode;
+    state.coachCut = false;
+    ['mode-real', 'mode-side', 'mode-target'].forEach((id) => {
+      $(id).classList.toggle('primary', id === 'mode-' + mode);
+    });
+    $('btn-coach-cut').classList.remove('primary', 'active');
+    $('coach-cut-label').textContent = 'Modeled faults';
+    targetRoot.visible = mode === 'side' && !!targetRig;
+    swimmerRoot.position.z = mode === 'side' ? -0.55 : 0;
+    targetRoot.position.z = 0.55;
+    $('step-strip').style.display = 'none';
+  }
+  function rebuildRealReport() {
+    if (!rig || !state.realData) return;
+    const frames = state.realData.frames;
+    let rollMax = -1e9, rollMin = 1e9, entryMin = 1e9, hipMin = 1e9, hipMax = -1e9;
+    let catchElbow = 0, catchDepth = -1e9;
+    const step = Math.max(1, Math.floor(frames.length / 48));
+    for (let i = 0; i < frames.length; i += step) {
+      const joints = applyPose(rig, hydratePose(frames[i]));
+      const measured = measure(joints);
+      rollMax = Math.max(rollMax, measured.roll);
+      rollMin = Math.min(rollMin, measured.roll);
+      hipMin = Math.min(hipMin, measured.hipLine);
+      hipMax = Math.max(hipMax, measured.hipLine);
+      const depth = joints.rSh.y - joints.rWr.y;
+      if (depth > catchDepth) { catchDepth = depth; catchElbow = measured.elbowR; }
+      entryMin = Math.min(entryMin, measured.rWristFromCenter);
+    }
+    const target = (window.__swimformCheck && window.__swimformCheck.report && window.__swimformCheck.report.target) || {
+      catchElbow: 0, rollRight: 0, rollLeft: 0, entryCm: 0, hipLine: 0
+    };
+    fillReport({
+      you: {
+        catchElbow: catchElbow, rollRight: rollMax, rollLeft: -rollMin,
+        entryCm: entryMin * 100, hipLine: (hipMin + hipMax) / 2
+      },
+      target: target
+    });
+    $('report-head').innerHTML = '<tr><th>Check</th><th>Your real video</th><th>Target</th></tr>';
+    $('report-note').textContent = 'Measured on the rig from your clip. Roll and hand entry are estimates from one camera.';
+    document.body.dataset.realReport = '1';
+  }
+  function loadRealText(text) {
+    let data;
+    try { data = JSON.parse(text); }
+    catch (err) { toast('That file is not JSON.'); return; }
+    acceptRealStroke(data);
+  }
+  function acceptRealStroke(data) {
+    if (!data || !data.frames || !data.frames.length || !data.frames[0].arms) {
+      toast('This JSON has no stroke frames.');
+      return;
+    }
+    state.realData = data;
+    state.realTime = 0;
+    $('real-modes').hidden = false;
+    setViewMode('real');
+    if (rig) rebuildRealReport();
+    toast('Real stroke loaded. ' + data.frames.length + ' frames.');
+  }
+  ['real', 'side', 'target'].forEach((mode) => {
+    $('mode-' + mode).addEventListener('click', () => setViewMode(mode));
+  });
+  if (window.__REAL_STROKE_3D__) acceptRealStroke(window.__REAL_STROKE_3D__);
+
+  // ===========================================================================
+  // 8. REEL EXPORT: records one pass of the coach cut, or the real stroke, at 1080x1920
   // ===========================================================================
   const rec = { canvas: null, ctx: null, recorder: null, chunks: [], saved: null };
   function roundRectPath(ctx, x, y, w, h, r) {
@@ -6116,7 +6298,12 @@
     const ctx = rec.ctx, W = rec.canvas.width, H = rec.canvas.height, k = W / 368;
     ctx.drawImage(renderer.domElement, 0, 0, W, H);
     if (glow && state.showOverlay) drawGlow(ctx, glow.pts.map(p => project(p, W, H)), glow, k);
-    const st = STEPS[state.stepIndex], kind = stepKind(st);
+    const st = (state.realData && state.mode) ? {
+      label: state.mode === 'target' ? 'Target form' : (state.mode === 'side' ? 'My stroke vs target' : 'My real stroke'),
+      sub: 'Lifted from your video. Roll and hand entry are estimates from one camera.',
+      profile: state.mode === 'target' ? 'target' : 'you'
+    } : STEPS[state.stepIndex];
+    const kind = (state.realData && state.mode) ? (state.mode === 'target' ? 'target' : 'fault') : stepKind(st);
     const edge = kind === 'fault' ? '#ff2e4c' : (kind === 'target' ? '#a3e635' : '#22d3ee');
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = `800 ${Math.round(21 * k)}px Inter, Arial, sans-serif`;
@@ -6170,10 +6357,19 @@
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
     };
-    state.exporting = true; state.coachCut = true; state.playing = true; state.speed = 1;
+    state.exporting = true; state.playing = true; state.speed = 1;
     rec.cancelled = false; rec.elapsed = 0;
-    rec.span = exportSpan();
-    goToStep(rec.span.from, 0);
+    rec.real = !!(state.realData && state.mode);
+    if (rec.real) {
+      state.realTime = 0;
+      rec.span = null;
+      rec.spanSeconds = Math.min(realDuration() || 8, 12);
+    } else {
+      state.coachCut = true;
+      rec.span = exportSpan();
+      rec.spanSeconds = (rec.span.to - rec.span.from + 1) * STEP_SECONDS;
+      goToStep(rec.span.from, 0);
+    }
     updateCamera(true);
     rec.recorder.start(500);
   }
@@ -6209,12 +6405,18 @@
     uTime.value += dt;
 
     if (state.playing) {
+      if (state.realData && state.mode) {
+        state.realTime += dt * state.speed;
+        const dur = realDuration();
+        if (dur > 0 && state.realTime >= dur) state.realTime %= dur;
+      }
       state.tau += dt * state.speed;
-      if (state.coachCut) {
+      if (state.coachCut && !(state.realData && state.mode)) {
         if (state.exporting) {
           rec.elapsed += dt;
-          const spanSeconds = (rec.span.to - rec.span.from + 1) * STEP_SECONDS;
+          const spanSeconds = rec.spanSeconds || ((rec.span.to - rec.span.from + 1) * STEP_SECONDS);
           $('btn-export').textContent = `Recording ${Math.min(rec.elapsed, spanSeconds).toFixed(0)}s / ${spanSeconds.toFixed(0)}s (cancel)`;
+          if (rec.real && rec.elapsed >= spanSeconds) { finishExport(false); state.realTime = 0; }
         }
         while (state.tau >= STEP_SECONDS) {
           const endStep = state.exporting ? rec.span.to : STEPS.length - 1;
@@ -6248,16 +6450,26 @@
     lastPhase = th;
 
     let joints = null, m = null, glow = null;
-    if (rig) {
+    if (rig && state.realData && state.mode) {
+      const realPose = sampleRealPose(state.realTime);
+      const targetPose = computePose('target', (state.realTime / STROKE_PERIOD) % 1, rig.torsoLen);
+      if (state.mode === 'target') joints = applyPose(rig, targetPose);
+      else joints = applyPose(rig, realPose);
+      if (state.mode === 'side' && targetRig) applyPose(targetRig, targetPose);
+      m = measure(joints);
+      glow = null;
+    } else if (rig) {
       joints = applyPose(rig, computePose(step.profile, th, rig.torsoLen));
       m = measure(joints);
       glow = glowFor(step, joints, m);
     }
 
     updateCamera(false);
-    const T = state.stepIndex * STEP_SECONDS + (state.tau % STEP_SECONDS);
-    $('scrubber').value = Math.round((T / TOTAL_SECONDS) * 1000);
-    $('time-readout').textContent = `${T.toFixed(1)}s / ${TOTAL_SECONDS.toFixed(1)}s`;
+    const realClock = state.realData && state.mode;
+    const T = realClock ? state.realTime : state.stepIndex * STEP_SECONDS + (state.tau % STEP_SECONDS);
+    const total = realClock ? (realDuration() || 1) : TOTAL_SECONDS;
+    $('scrubber').value = Math.round((T / total) * 1000);
+    $('time-readout').textContent = `${T.toFixed(1)}s / ${total.toFixed(1)}s`;
 
     renderer.render(scene, camera);
     renderOverlay(glow);
@@ -6271,7 +6483,11 @@
   requestAnimationFrame(frame);
 
   // test hooks
-  window.__swimform = { state, cam: camera, trunkUniforms, STEPS, goToStep, setReel, measure, computePose, applyPose, strokePhase, get rig() { return rig; }, updateCamera };
+  window.__swimform = {
+    state, cam: camera, trunkUniforms, STEPS, goToStep, setReel, measure, computePose, applyPose,
+    strokePhase, sampleRealPose, setViewMode, acceptRealStroke,
+    get rig() { return rig; }, updateCamera
+  };
   </script>
 </body>
 </html>
