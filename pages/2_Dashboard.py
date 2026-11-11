@@ -22,7 +22,29 @@ import shutil
 import gc
 
 from analytics import track
-from ingest import cached_duration, encode_slowmo, release_analysis_resources, write_upload_to_temp
+from ingest import (
+    MAX_UPLOAD_BYTES,
+    UPLOAD_EXTENSIONS,
+    encode_slowmo,
+    extract_preview_jpeg,
+    normalize_video_to_cfr,
+    probe_video_metadata,
+    release_analysis_resources,
+    upload_suffix,
+    write_upload_to_temp,
+)
+from video_preflight import (
+    ANALYSIS_WINDOW_MAX,
+    ANALYSIS_WINDOW_MIN,
+    coast_track,
+    framing_verdict,
+    next_timestamp,
+    sample_times,
+    should_persist_report,
+    should_probe_tiles,
+    span_fraction,
+    tile_boxes,
+)
 from payments import retrieve_paid_checkout, valid_session_id
 from results_store import (
     acquire_lock,
@@ -2188,6 +2210,8 @@ class SwimAnalyzer:
         # Tracking-crop ("virtual camera") state — smoothed swimmer position
         self._track_center = None   # (cx, cy) in full-frame pixels
         self._track_size = None     # half-width of crop window in pixels
+        self._coast_misses = 0
+        self._untracked_frames = 0
 
         # Pose centroid history for moving-vs-static discrimination
         # (real swimmers travel; lane lines / floor markings don't)
@@ -2285,18 +2309,35 @@ class SwimAnalyzer:
             if result.pose_landmarks:
                 used_crop = crop_box
             else:
-                # Lost inside the crop → re-detect on the full frame
-                # (detect_for_video requires a strictly increasing timestamp)
-                self.last_timestamp_ms += 1
+                # One splash frame used to wipe the track. Hold it, a little
+                # wider, for up to MAX_COAST_FRAMES, and look at the full frame
+                # with a fresh timestamp in case the swimmer left the window.
+                self._track_center, self._track_size, self._coast_misses = coast_track(
+                    self._track_center, self._track_size, self._coast_misses,
+                )
+                self.last_timestamp_ms = next_timestamp(self.last_timestamp_ms)
                 result = _detect(frame, self.last_timestamp_ms)
+                if not result.pose_landmarks:
+                    if self._track_center is None:
+                        self._untracked_frames = 0
+                    return result, None
         else:
             result = _detect(frame, timestamp_ms)
-
-        if not result.pose_landmarks:
-            # Lose the track so the next frame starts from a clean full-frame pass
-            self._track_center = None
-            self._track_size = None
-            return result, None
+            if not result.pose_landmarks:
+                self._untracked_frames += 1
+                # A wide-angle frame shrinks the swimmer inside MediaPipe's
+                # internal 256px resize. Zoomed tiles recover that swimmer.
+                if should_probe_tiles(self._untracked_frames):
+                    for box in tile_boxes(W, H):
+                        self.last_timestamp_ms = next_timestamp(self.last_timestamp_ms)
+                        x0, y0, x1, y1 = box
+                        tiled = _detect(frame[y0:y1, x0:x1], self.last_timestamp_ms)
+                        if tiled.pose_landmarks:
+                            result = tiled
+                            used_crop = box
+                            break
+                if not result.pose_landmarks:
+                    return result, None
 
         # Remap crop-space landmarks to full-frame normalized coords IN PLACE
         if used_crop is not None:
@@ -2314,6 +2355,8 @@ class SwimAnalyzer:
         span = max(max(xs) - min(xs), max(ys) - min(ys))
         target_half = max(span * 1.6, 260.0)  # generous padding, never razor-tight
         alpha = 0.25  # EMA smoothing — keeps the crop stable frame-to-frame
+        self._coast_misses = 0
+        self._untracked_frames = 0
         if self._track_center is None:
             self._track_center = (bcx, bcy)
             self._track_size = target_half
@@ -3751,6 +3794,51 @@ def _hydrate_saved_report():
     }
 
 
+def _framing_spans(path, times):
+    """Sample three frames. None for a frame means the check itself failed."""
+    spans = []
+    try:
+        if not MEDIAPIPE_TASKS_AVAILABLE:
+            return [None] * len(times)
+        landmarker = st.session_state.get("_preflight_landmarker")
+        if landmarker is None:
+            model_path = SwimAnalyzer._download_model(
+                SwimAnalyzer.MODEL_URL_LITE, SwimAnalyzer.MODEL_FILENAME_LITE, "~8 MB",
+            )
+            options = vision.PoseLandmarkerOptions(
+                base_options=python.BaseOptions(model_asset_path=model_path),
+                running_mode=vision.RunningMode.IMAGE,
+                num_poses=1,
+                min_pose_detection_confidence=0.35,
+                min_pose_presence_confidence=0.35,
+            )
+            landmarker = vision.PoseLandmarker.create_from_options(options)
+            st.session_state["_preflight_landmarker"] = landmarker
+        for instant in times:
+            jpeg = extract_preview_jpeg(path, instant, max_side=640)
+            frame = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR) if jpeg else None
+            if frame is None:
+                spans.append(None)
+                continue
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            result = landmarker.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+            if not result.pose_landmarks:
+                spans.append(0.0)
+                continue
+            height, width = frame.shape[:2]
+            marks = result.pose_landmarks[0]
+            spans.append(span_fraction(
+                [lm.x * width for lm in marks],
+                [lm.y * height for lm in marks],
+                width,
+                height,
+            ))
+    except Exception:
+        logging.exception("framing pre-check skipped")
+        return [None] * len(times)
+    return spans
+
+
 def main():
     # Force reset any landing styles
     st.markdown("""
@@ -3944,6 +4032,11 @@ def main():
     # ═══════════════════════════════════════════════════════════════
 
     st.subheader("📹 Step 1: Upload Your Video")
+    st.info(
+        "Film **alongside** the swimmer, close enough that they fill the frame, "
+        "with the lens near the waterline. A side view works best. "
+        "Clips longer than 15 seconds can be trimmed here."
+    )
 
     # If a credit was just consumed, only allow viewing the cached result for
     # that exact upload. A NEW upload requires a fresh paid session.
@@ -3964,7 +4057,7 @@ def main():
     else:
         uploaded = st.file_uploader(
             "Upload swimming video",
-            type=["mp4", "mov", "avi", "MOV", "MP4", "AVI", "m4v", "M4V"],
+            type=list(UPLOAD_EXTENSIONS),
         )
     if uploaded and "upload_tracked" not in st.session_state:
         track("video_uploaded", {"filename": uploaded.name, "size_mb": round(uploaded.size / (1024 * 1024), 1)})
@@ -3972,32 +4065,140 @@ def main():
     
     if not FFMPEG_AVAILABLE:
         st.caption("⚠️ Video processing is unavailable on this server — uploads cannot be analyzed. "
-                   "Please try again later or email your clip to info@swimform-ai.com. Max 30 seconds.")
+                   "Please try again later or email your clip to info@swimform-ai.com.")
     else:
-        st.caption("✅ All common video formats supported including iPhone recordings (.MOV/HEVC). Max 30 seconds.")
+        st.caption("✅ GoPro, iPhone, and other phone formats. Up to 500 MB. "
+                   "Longer clips are trimmed in the app to a 6–15 second window.")
 
-    if uploaded and uploaded.size > 100 * 1024 * 1024:
-        st.error("Video must be under 100MB. Please trim your clip.")
+    if uploaded and uploaded.size > MAX_UPLOAD_BYTES:
+        st.error("Video must be under 500MB. Please trim your clip.")
         st.stop()
 
-    # ── DURATION LIMIT: 30 seconds max ──
-    # Probed once per upload. The video-type radio reruns this script, and the
-    # cached duration means that rerun does not write a temp file or call ffprobe.
-    MAX_DURATION_SECONDS = 30
+    clip_start_s = 0.0
+    clip_duration_s = None
+    playback_speed = 1.0
+    clip_orientation = "auto"
+    clip_undistort = False
+    video_meta = None
+    staged_path = None
+    framing_blocks = False
 
     if uploaded:
-        _duration_cache = st.session_state.setdefault("probed_durations", {})
-        video_duration = cached_duration(_duration_cache, uploaded, FFMPEG_AVAILABLE)
+        stage_key = f"{uploaded.name}:{uploaded.size}"
+        staged = st.session_state.get("staged_upload")
+        if not staged or staged.get("key") != stage_key or not os.path.exists(staged.get("path", "")):
+            if staged and staged.get("path") and staged.get("key") != stage_key:
+                try:
+                    os.unlink(staged["path"])
+                except OSError:
+                    pass
+            staged_path = write_upload_to_temp(uploaded, suffix=upload_suffix(uploaded.name))
+            video_meta = probe_video_metadata(staged_path) if FFMPEG_AVAILABLE else None
+            st.session_state["staged_upload"] = {
+                "key": stage_key, "path": staged_path, "meta": video_meta,
+            }
+        else:
+            staged_path = staged["path"]
+            video_meta = staged.get("meta")
 
-        if video_duration is not None and video_duration > MAX_DURATION_SECONDS:
+        if video_meta is None and FFMPEG_AVAILABLE:
             st.error(
-                f"⏱️ **Video is {video_duration:.0f} seconds — max is {MAX_DURATION_SECONDS} seconds.** "
-                f"Please trim your clip to 10–15 seconds of one stroke cycle for the best analysis. "
-                f"Shorter clips also produce more accurate biomechanics data."
+                "This file has no video stream we can read (it may be audio-only, "
+                "or only a cover image). Export the clip as a standard video and try again."
             )
             st.stop()
 
-    if uploaded:
+        video_duration = (video_meta or {}).get("duration")
+        playback_label = st.selectbox(
+            "Clip playback speed",
+            ["1x Normal", "0.5x Slow-Mo", "0.25x (120fps Slow-Mo)", "0.125x (240fps Slow-Mo)"],
+            help="Pick the speed this export plays at. A slow-motion export is sped back up to real time.",
+        )
+        playback_speed = {
+            "1x Normal": 1.0,
+            "0.5x Slow-Mo": 0.5,
+            "0.25x (120fps Slow-Mo)": 0.25,
+            "0.125x (240fps Slow-Mo)": 0.125,
+        }[playback_label]
+        orientation_label = st.selectbox(
+            "Orientation",
+            ["Auto", "Flip 180 deg (upside-down GoPro pole)", "Rotate 90 deg CW", "Rotate 90 deg CCW"],
+        )
+        clip_orientation = {
+            "Auto": "auto",
+            "Flip 180 deg (upside-down GoPro pole)": "flip180",
+            "Rotate 90 deg CW": "rot90cw",
+            "Rotate 90 deg CCW": "rot90ccw",
+        }[orientation_label]
+        if video_meta and video_meta.get("is_gopro"):
+            clip_undistort = st.checkbox(
+                "GoPro wide-lens undistort",
+                value=False,
+                help="Off by default, so Linear-mode footage is left alone.",
+            )
+
+        if video_duration is not None and video_duration > ANALYSIS_WINDOW_MAX:
+            window_cap = min(ANALYSIS_WINDOW_MAX, video_duration)
+            clip_duration_s = st.slider(
+                "Stroke window length (seconds)",
+                min_value=ANALYSIS_WINDOW_MIN,
+                max_value=float(window_cap),
+                value=min(12.0, float(window_cap)),
+                step=0.5,
+            )
+            clip_start_s = st.slider(
+                "Window start (seconds)",
+                min_value=0.0,
+                max_value=float(max(0.0, video_duration - clip_duration_s)),
+                value=0.0,
+                step=0.5,
+            )
+            preview_times = (
+                clip_start_s,
+                clip_start_s + clip_duration_s / 2.0,
+                clip_start_s + clip_duration_s,
+            )
+            preview_cols = st.columns(3)
+            for column, instant, label in zip(preview_cols, preview_times, ("Start", "Middle", "End")):
+                jpeg = extract_preview_jpeg(staged_path, instant)
+                with column:
+                    st.caption(label)
+                    if jpeg:
+                        st.image(jpeg)
+        else:
+            clip_start_s = 0.0
+            clip_duration_s = None
+
+        if playback_speed < 1.0:
+            source_window = clip_duration_s if clip_duration_s else video_duration
+            if source_window:
+                st.caption(
+                    f"That selection is about {source_window * playback_speed:.1f}s of real swimming "
+                    "after the slow-motion export is sped up. Use a longer window if the report says the clip was too short."
+                )
+
+        check_window = clip_duration_s if clip_duration_s else (video_duration or 0.0)
+        if check_window > 0 and staged_path:
+            times = sample_times(clip_start_s, check_window)
+            frame_key = f"{stage_key}:{clip_start_s:.2f}:{check_window:.2f}"
+            if st.session_state.get("framing_key") != frame_key:
+                st.session_state["framing_key"] = frame_key
+                st.session_state["framing_spans"] = _framing_spans(staged_path, times)
+            verdict = framing_verdict(st.session_state.get("framing_spans") or [])
+            if verdict == "too_small":
+                st.warning(
+                    "The swimmer looks small in this window. Move the camera closer, "
+                    "or analyze this clip anyway."
+                )
+            elif verdict == "no_swimmer":
+                st.warning(
+                    "No swimmer was found in the sample frames. Check the window, "
+                    "or analyze this clip anyway."
+                )
+            if verdict in ("too_small", "no_swimmer"):
+                analyze_anyway = st.checkbox("Analyze anyway", value=False)
+                framing_blocks = not analyze_anyway
+
         file_size_mb = uploaded.size / (1024 * 1024)
         st.success(f"✅ Video uploaded: **{uploaded.name}** ({file_size_mb:.1f} MB)")
 
@@ -4067,7 +4268,7 @@ def main():
     # so a user who just paid can still see/download their analysis.
     _post_consume_cache_key = st.session_state.get("credit_consumed_for_cache_key")
     _cache_only_mode = False
-    if uploaded and video_type:
+    if uploaded and video_type and not framing_blocks:
         pass  # original flow continues below
     elif _post_consume_cache_key and "analysis_results" in st.session_state:
         cache_key = _post_consume_cache_key
@@ -4083,10 +4284,13 @@ def main():
         selected_water = cached["selected_water"]
         _cache_only_mode = True
 
-    if (uploaded and video_type) or _cache_only_mode:
+    if (uploaded and video_type and not framing_blocks) or _cache_only_mode:
         if not _cache_only_mode:
             # Use a cache key based on file name + size to detect new uploads
-            cache_key = f"{uploaded.name}_{uploaded.size}"
+            cache_key = (
+                f"{uploaded.name}_{uploaded.size}_{clip_start_s:.2f}_{clip_duration_s}_"
+                f"{playback_speed}_{clip_orientation}_{int(bool(clip_undistort))}"
+            )
 
             if st.session_state.get("analysis_cache_key") == cache_key and "analysis_results" in st.session_state:
                 # Reuse cached results — do NOT re-process
@@ -4131,11 +4335,17 @@ def main():
                         st.stop()
                     lock_acquired = True
 
-                input_path = write_upload_to_temp(uploaded)
+                input_path = staged_path or write_upload_to_temp(
+                    uploaded, suffix=upload_suffix(uploaded.name)
+                )
+                _meta = video_meta or probe_video_metadata(input_path) or {}
 
-                # Auto-pick Heavy model when the SOURCE video was HD or larger.
-                _src_w, _src_h = _probe_video_dimensions(input_path)
-                _src_long_side = max(_src_w, _src_h)
+                # Auto-pick Heavy model from the size the camera recorded,
+                # after rotation, not from the downscaled analysis file.
+                _src_long_side = max(int(_meta.get("display_w") or 0), int(_meta.get("display_h") or 0))
+                if _src_long_side <= 0:
+                    _src_w, _src_h = _probe_video_dimensions(input_path)
+                    _src_long_side = max(_src_w, _src_h)
                 _use_heavy = _src_long_side >= MAX_LONGEST_SIDE
                 if _use_heavy:
                     st.info("📹 HD video detected — using the high-accuracy pose model (first run downloads ~120MB, then cached).")
@@ -4153,10 +4363,26 @@ def main():
                 conversion_status = st.empty()
 
                 input_path_original = input_path  # keep reference for cleanup
-                input_path, ok = preconvert_to_h264(input_path)
+                input_path, ok, _norm_message = normalize_video_to_cfr(
+                    input_path,
+                    start_s=clip_start_s,
+                    duration_s=clip_duration_s,
+                    playback_speed=playback_speed,
+                    orientation=clip_orientation,
+                    undistort=bool(clip_undistort),
+                    video_stream_index=(_meta or {}).get("video_stream_index"),
+                )
 
                 if ok:
                     converted_path = input_path  # track for cleanup
+                    # The raw upload is no longer needed once the CFR file exists.
+                    if input_path_original and input_path_original != input_path:
+                        try:
+                            os.unlink(input_path_original)
+                        except OSError:
+                            pass
+                        st.session_state.pop("staged_upload", None)
+                        input_path_original = None
                     conversion_status.success("✅ Video normalized to constant-framerate H.264")
                 else:
                     # FAIL LOUD: never analyze a non-normalized file. VFR / odd
@@ -4417,7 +4643,8 @@ def main():
                 # the saved report. Admin sessions are exempt.
                 _pay_sid = st.session_state.get("active_session_id")
                 if (
-                    _pay_sid
+                    should_persist_report(True, True, framing_blocked=False)
+                    and _pay_sid
                     and persistence_enabled()
                     and not st.session_state.get("is_admin_session", False)
                 ):
