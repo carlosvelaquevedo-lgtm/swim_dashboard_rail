@@ -1,0 +1,1813 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SwimForm AI - Freestyle in 3D</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-panel: rgba(6, 18, 32, 0.88);
+      --bg-card: rgba(9, 26, 44, 0.78);
+      --border-cyan: rgba(34, 211, 238, 0.26);
+      --border-subtle: rgba(148, 163, 184, 0.16);
+      --cyan: #22d3ee;
+      --lime: #a3e635;
+      --coral: #ff2e4c;
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --mono: 'Space Mono', ui-monospace, Menlo, monospace;
+      --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: radial-gradient(circle at 25% 10%, #072638 0%, #03101c 55%, #01060c 100%);
+      color: var(--text-main);
+      font-family: var(--sans);
+      min-height: 100vh;
+      overflow-x: hidden;
+      line-height: 1.45;
+    }
+    .page-shell { max-width: 1480px; margin: 0 auto; padding: 16px 22px 44px; }
+
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 11px 16px; background: var(--bg-panel); backdrop-filter: blur(16px);
+      border: 1px solid var(--border-cyan); border-radius: 16px; margin-bottom: 16px; flex-wrap: wrap;
+    }
+    .brand { display: flex; align-items: center; gap: 11px; }
+    .brand-logo {
+      width: 36px; height: 36px; border-radius: 10px;
+      background: linear-gradient(135deg, rgba(34, 211, 238, 0.22), rgba(16, 185, 129, 0.2));
+      border: 1px solid rgba(34, 211, 238, 0.5);
+      display: flex; align-items: center; justify-content: center; color: var(--cyan);
+      box-shadow: 0 0 18px rgba(34, 211, 238, 0.25);
+    }
+    .brand-name { font-family: var(--mono); font-weight: 700; font-size: 1.08rem; letter-spacing: 0.8px; color: #fff; }
+    .topbar-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+    .btn {
+      appearance: none; border: 1px solid var(--border-subtle); background: rgba(11, 29, 48, 0.9);
+      color: var(--text-main); font-family: var(--sans); font-size: 0.78rem; font-weight: 600;
+      padding: 7px 12px; border-radius: 10px; cursor: pointer; display: inline-flex; align-items: center;
+      gap: 6px; transition: all 0.16s ease; user-select: none;
+    }
+    .btn:hover { border-color: rgba(34, 211, 238, 0.55); transform: translateY(-1px); }
+    .btn.primary {
+      background: linear-gradient(135deg, #06b6d4, #0d9488); border-color: rgba(34, 211, 238, 0.65);
+      color: #fff; font-weight: 700; box-shadow: 0 8px 22px rgba(6, 182, 212, 0.3);
+    }
+    .btn.primary.active {
+      background: linear-gradient(135deg, #f43f5e, #be123c); border-color: #fda4af;
+      box-shadow: 0 8px 22px rgba(244, 63, 94, 0.38);
+    }
+    .toggle-pill {
+      display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 10px;
+      background: rgba(8, 22, 38, 0.9); border: 1px solid var(--border-subtle);
+      font-size: 0.76rem; font-weight: 600; cursor: pointer; user-select: none;
+    }
+    .toggle-pill input { accent-color: var(--cyan); width: 14px; height: 14px; cursor: pointer; }
+    .toggle-pill select {
+      background: transparent; color: var(--text-main); border: none; font: inherit; font-weight: 600; max-width: 180px;
+    }
+    .cta-bar {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      margin-top: 14px; padding: 12px 14px; border-radius: 14px;
+      background: rgba(6, 18, 32, 0.88); border: 1px solid var(--border-cyan);
+    }
+    .cta-bar p { color: var(--text-muted); font-size: 0.8rem; }
+    .cta-bar input[type="email"] {
+      flex: 1; min-width: 180px; background: rgba(4, 14, 26, 0.9); color: #fff;
+      border: 1px solid var(--border-subtle); border-radius: 10px; padding: 8px 10px; font: inherit;
+    }
+
+    .intro-bar { display: grid; grid-template-columns: 1fr auto; gap: 18px; align-items: end; margin-bottom: 14px; }
+    .intro-bar h1 { font-size: clamp(1.45rem, 2.2vw, 1.98rem); font-weight: 800; letter-spacing: -0.02em; color: #fff; margin-bottom: 4px; }
+    .intro-bar h1 span { background: linear-gradient(90deg, #22d3ee, #a3e635); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .intro-bar p { color: var(--text-muted); font-size: 0.88rem; max-width: 840px; }
+    .legend-cluster {
+      display: flex; align-items: center; gap: 13px; background: var(--bg-card);
+      border: 1px solid var(--border-subtle); padding: 8px 14px; border-radius: 12px; font-size: 0.76rem; font-weight: 600;
+    }
+    .legend-item { display: flex; align-items: center; gap: 6px; }
+    .swatch { width: 11px; height: 11px; border-radius: 4px; }
+    .swatch.wrong { background: var(--coral); box-shadow: 0 0 10px var(--coral); }
+    .swatch.right { background: var(--lime); box-shadow: 0 0 10px var(--lime); }
+
+    .workspace-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(345px, 0.72fr); gap: 18px; align-items: start; }
+    @media (max-width: 1120px) {
+      .workspace-grid { grid-template-columns: 1fr; }
+      .intro-bar { grid-template-columns: 1fr; }
+    }
+
+    .stage-wrapper {
+      background: var(--bg-panel); border: 1px solid var(--border-cyan); border-radius: 20px; padding: 14px;
+      box-shadow: 0 26px 65px rgba(0, 0, 0, 0.65); display: flex; flex-direction: column; gap: 12px;
+    }
+    .stage-viewport-shell {
+      position: relative; width: 100%; height: 560px; border-radius: 16px; overflow: hidden;
+      background: #020b13; border: 1px solid rgba(34, 211, 238, 0.28); margin: 0 auto;
+    }
+    .stage-viewport-shell.reel-mode {
+      width: 368px; max-width: 100%; height: 654px; border: 2px solid rgba(34, 211, 238, 0.7);
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.9);
+    }
+    #three-canvas-container { width: 100%; height: 100%; cursor: grab; }
+    #three-canvas-container:active { cursor: grabbing; }
+    #overlay-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4; }
+
+    .stage-message {
+      position: absolute; inset: 0; z-index: 9; display: flex; align-items: center; justify-content: center;
+      pointer-events: none; text-align: center; padding: 24px;
+    }
+    .stage-message span {
+      font-size: 0.95rem; font-weight: 700; color: #e2e8f0; background: rgba(3, 12, 22, 0.88);
+      border: 1px solid rgba(34, 211, 238, 0.35); padding: 10px 18px; border-radius: 12px;
+    }
+    .stage-message.error span { border-color: rgba(255, 46, 76, 0.7); color: #fecdd3; }
+    .stage-message.hidden { display: none; }
+
+    .top-pill-container {
+      position: absolute; top: 20px; left: 50%; transform: translateX(-50%); z-index: 8; pointer-events: none;
+      display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: 92%;
+    }
+    .ref-pill {
+      background: rgba(6, 12, 18, 0.9); color: #fff; font-size: 1.24rem; font-weight: 800; letter-spacing: -0.01em;
+      padding: 9px 26px; border-radius: 999px; border: 1.5px solid rgba(255, 255, 255, 0.28);
+      box-shadow: 0 0 24px rgba(34, 211, 238, 0.25), 0 10px 25px rgba(0, 0, 0, 0.65);
+      white-space: nowrap; transition: border-color 0.22s ease, box-shadow 0.22s ease;
+    }
+    .ref-pill.fault  { border-color: rgba(255, 46, 76, 0.72); box-shadow: 0 0 26px rgba(255, 46, 76, 0.5), 0 10px 25px rgba(0, 0, 0, 0.65); }
+    .ref-pill.target { border-color: rgba(163, 230, 53, 0.75); box-shadow: 0 0 26px rgba(163, 230, 53, 0.5), 0 10px 25px rgba(0, 0, 0, 0.65); }
+    .ref-who {
+      font-family: var(--mono); font-size: 0.62rem; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase;
+      padding: 2px 9px; border-radius: 999px; background: rgba(3, 12, 22, 0.85);
+    }
+    .ref-who.fault  { color: #fda4af; border: 1px solid rgba(255, 46, 76, 0.5); }
+    .ref-who.target { color: #bef264; border: 1px solid rgba(163, 230, 53, 0.5); }
+    .ref-sub-caption {
+      font-size: 0.74rem; font-weight: 600; color: #dbeafe; background: rgba(3, 12, 22, 0.8);
+      padding: 4px 12px; border-radius: 12px; border: 1px solid rgba(34, 211, 238, 0.25); text-align: center;
+    }
+
+    .corner-brand {
+      position: absolute; top: 14px; left: 14px; z-index: 6; pointer-events: none;
+      font-family: var(--mono); font-size: 0.66rem; font-weight: 700; letter-spacing: 0.9px; color: var(--cyan);
+      background: rgba(3, 12, 22, 0.82); padding: 5px 10px; border-radius: 8px; border: 1px solid rgba(34, 211, 238, 0.35);
+    }
+    .stage-viewport-shell.reel-mode .corner-brand { top: auto; bottom: 14px; }
+
+    .pip-card {
+      position: absolute; bottom: 14px; left: 14px; width: 232px; background: rgba(4, 12, 22, 0.9);
+      border: 1px solid rgba(34, 211, 238, 0.32); border-radius: 12px; overflow: hidden; z-index: 6;
+      box-shadow: 0 12px 28px rgba(0,0,0,0.55); pointer-events: none;
+    }
+    .pip-header {
+      padding: 5px 9px; font-size: 0.63rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
+      color: var(--cyan); background: rgba(10, 28, 48, 0.9); border-bottom: 1px solid rgba(34, 211, 238, 0.2);
+    }
+    #pip-canvas { display: block; width: 100%; height: 106px; }
+
+    .hud-bottom-right { position: absolute; bottom: 14px; right: 14px; z-index: 6; pointer-events: none; display: flex; gap: 8px; }
+    .telemetry-chip {
+      background: rgba(4, 12, 22, 0.86); border: 1px solid rgba(148, 163, 184, 0.22); border-radius: 10px;
+      padding: 6px 10px; font-family: var(--mono); min-width: 128px;
+    }
+    .telemetry-chip .t-label { font-size: 0.59rem; color: var(--text-muted); text-transform: uppercase; }
+    .telemetry-chip .t-val { font-size: 0.95rem; font-weight: 700; color: #fff; margin-top: 1px; }
+    .telemetry-chip .t-note { font-size: 0.58rem; color: var(--text-dim); margin-top: 1px; white-space: nowrap; }
+
+    .stage-viewport-shell.reel-mode .pip-card,
+    .stage-viewport-shell.reel-mode .hud-bottom-right { display: none; }
+
+    @media (max-width: 640px) {
+      .pip-card { display: none !important; }
+      .stage-viewport-shell { height: 62vh; margin-bottom: 168px; overflow: visible; }
+      .hud-bottom-right {
+        left: 0; right: 0; bottom: -160px;
+        flex-direction: column; align-items: stretch;
+      }
+      .telemetry-chip { min-width: 0; }
+      .step-strip { display: flex; overflow-x: auto; padding-bottom: 4px; }
+      .step-chip { min-width: 112px; flex: 0 0 auto; }
+      .topbar-controls { width: 100%; }
+    }
+
+    .step-strip { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px; }
+    @media (max-width: 1000px) { .step-strip { grid-template-columns: repeat(3, 1fr); } }
+    .step-chip {
+      appearance: none; background: rgba(8, 22, 38, 0.85); border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 10px; padding: 8px 4px; color: #cbd5e1; font-family: var(--sans); font-size: 0.71rem;
+      font-weight: 700; cursor: pointer; text-align: center; transition: all 0.16s ease;
+      display: flex; flex-direction: column; align-items: center; gap: 3px; line-height: 1.2;
+    }
+    .step-chip .tag { font-family: var(--mono); font-size: 0.56rem; text-transform: uppercase; letter-spacing: 0.5px; padding: 1px 5px; border-radius: 4px; }
+    .step-chip.fault .tag  { background: rgba(255, 46, 76, 0.2); color: #fda4af; }
+    .step-chip.target .tag { background: rgba(163, 230, 53, 0.18); color: #bef264; }
+    .step-chip.none .tag   { background: rgba(34, 211, 238, 0.2); color: #67e8f9; }
+    .step-chip.active { background: rgba(16, 42, 68, 0.95); color: #fff; transform: translateY(-1px); }
+    .step-chip.fault.active  { border-color: var(--coral); box-shadow: 0 0 14px rgba(255, 46, 76, 0.35); }
+    .step-chip.target.active { border-color: var(--lime); box-shadow: 0 0 14px rgba(163, 230, 53, 0.35); }
+    .step-chip.none.active   { border-color: var(--cyan); box-shadow: 0 0 14px rgba(34, 211, 238, 0.38); }
+
+    .controls-bar {
+      display: flex; flex-direction: column; gap: 10px; background: rgba(6, 16, 30, 0.8);
+      border: 1px solid var(--border-subtle); border-radius: 14px; padding: 11px 14px;
+    }
+    .scrubber-row { display: flex; align-items: center; gap: 12px; }
+    .scrubber-slider { flex: 1; accent-color: var(--cyan); height: 6px; cursor: pointer; }
+    .time-readout { font-family: var(--mono); font-size: 0.75rem; color: var(--text-muted); min-width: 104px; text-align: right; }
+    .camera-and-speed { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    .pill-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .pill-label { font-size: 0.67rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-dim); margin-right: 3px; }
+    .chip-btn {
+      appearance: none; background: rgba(12, 30, 52, 0.8); border: 1px solid rgba(148, 163, 184, 0.2);
+      color: #cbd5e1; font-size: 0.72rem; font-weight: 600; padding: 5px 10px; border-radius: 8px; cursor: pointer; transition: all 0.15s ease;
+    }
+    .chip-btn:hover { border-color: var(--cyan); color: #fff; }
+    .chip-btn.active { background: rgba(34, 211, 238, 0.18); border-color: var(--cyan); color: var(--cyan); font-weight: 700; }
+
+    .analytics-column { display: flex; flex-direction: column; gap: 14px; }
+    .panel-card {
+      background: var(--bg-panel); border: 1px solid var(--border-cyan); border-radius: 18px; padding: 16px 18px;
+      box-shadow: 0 18px 45px rgba(0, 0, 0, 0.45);
+    }
+    .panel-card h2 { font-size: 1.02rem; font-weight: 800; color: #fff; }
+    .panel-card .panel-sub { font-size: 0.75rem; color: var(--text-muted); margin: 2px 0 12px; }
+    .report-table { width: 100%; border-collapse: collapse; font-size: 0.79rem; }
+    .report-table th {
+      text-align: left; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-dim);
+      padding: 4px 6px 8px; border-bottom: 1px solid var(--border-subtle);
+    }
+    .report-table td { padding: 8px 6px; border-bottom: 1px solid rgba(148, 163, 184, 0.08); vertical-align: middle; }
+    .measure-name { font-weight: 700; color: #f8fafc; }
+    .measure-sub { font-size: 0.69rem; color: var(--text-muted); margin-top: 1px; }
+    .val-you { font-family: var(--mono); font-weight: 700; font-size: 0.8rem; color: #ff6b85; }
+    .val-target { font-family: var(--mono); font-weight: 700; font-size: 0.8rem; color: #a3e635; }
+    .table-footnote { font-size: 0.72rem; color: var(--text-muted); margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(148, 163, 184, 0.16); }
+    .note-banner {
+      background: linear-gradient(135deg, rgba(11, 29, 50, 0.92), rgba(6, 18, 34, 0.92));
+      border: 1px solid rgba(34, 211, 238, 0.28); border-radius: 14px; padding: 12px 14px;
+      font-size: 0.76rem; color: #cbd5e1; display: flex; flex-direction: column; gap: 8px;
+    }
+    .note-banner strong { color: var(--cyan); }
+    .toast {
+      position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); z-index: 50;
+      background: rgba(20, 8, 14, 0.96); color: #fecdd3; border: 1px solid rgba(255, 46, 76, 0.7);
+      padding: 10px 18px; border-radius: 12px; font-size: 0.85rem; font-weight: 700; display: none;
+    }
+    .toast.show { display: block; }
+  </style>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-logo">
+          <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
+            <circle cx="16" cy="16" r="13" stroke="currentColor" stroke-width="2.2"/>
+            <path d="M 6 17 Q 16 10 26 17" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+            <path d="M 9 22 Q 16 17 23 22" stroke="#a3e635" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="brand-name">SWIMFORM AI</div>
+      </div>
+      <div class="topbar-controls">
+        <span id="real-modes" hidden>
+          <button id="mode-real" class="btn primary" type="button">My Real Stroke</button>
+          <button id="mode-side" class="btn" type="button">Side-by-Side (My Stroke vs Target)</button>
+          <button id="mode-target" class="btn" type="button">Target Form</button>
+        </span>
+        <button id="btn-coach-cut" class="btn primary active" type="button"><span id="coach-cut-label">Coach cut playing</span></button>
+        <label class="toggle-pill" for="export-range">Reel
+          <select id="export-range">
+            <option value="all">All 4 faults</option>
+            <option value="elbow">Dropped elbow vs high elbow</option>
+            <option value="roll">Flat rotation vs 40 degrees</option>
+            <option value="entry">Hand crosses center vs in line</option>
+            <option value="hips">Hips sinking vs long flat line</option>
+          </select>
+        </label>
+        <button id="btn-export" class="btn" type="button">Export reel video</button>
+        <label class="toggle-pill" for="chk-reel"><input type="checkbox" id="chk-reel" /><span>9:16 Reel</span></label>
+        <label class="toggle-pill" for="chk-overlay"><input type="checkbox" id="chk-overlay" checked /><span>Joint lines</span></label>
+      </div>
+    </header>
+
+    <section class="intro-bar">
+      <div>
+        <h1>Freestyle <span>in 3D</span></h1>
+        <p>A modeled stroke with four common faults. In SwimForm, this view would come from your own video.</p>
+      </div>
+      <div class="legend-cluster">
+        <div class="legend-item"><span class="swatch wrong"></span><span>You: the fault</span></div>
+        <div class="legend-item"><span class="swatch right"></span><span>Target: the fix</span></div>
+      </div>
+    </section>
+
+    <form id="cta-form" class="cta-bar" action="https://swimform-ai.com/" method="get">
+      <div>
+        <strong>Analyze my stroke</strong>
+        <p>$0.99. In SwimForm this view would come from your own video.</p>
+      </div>
+      <input id="cta-email" type="email" name="prefill_email" placeholder="Email for the report" autocomplete="email" />
+      <input type="hidden" name="utm_source" value="3d_viewer" />
+      <input type="hidden" name="utm_medium" value="cta" />
+      <button class="btn primary" type="submit">Analyze my stroke</button>
+    </form>
+
+    <main class="workspace-grid">
+      <section class="stage-wrapper">
+        <div id="viewport-shell" class="stage-viewport-shell">
+          <div id="three-canvas-container"></div>
+          <canvas id="overlay-canvas"></canvas>
+          <div id="stage-message" class="stage-message"><span>Loading swimmer...</span></div>
+
+          <div class="top-pill-container">
+            <div id="ref-who" class="ref-who"></div>
+            <div id="ref-pill" class="ref-pill"></div>
+            <div id="ref-sub-caption" class="ref-sub-caption"></div>
+          </div>
+
+          <div class="corner-brand">SWIMFORM AI</div>
+
+          <div class="pip-card">
+            <div class="pip-header">What the side camera sees</div>
+            <canvas id="pip-canvas" width="464" height="212"></canvas>
+          </div>
+
+          <div class="hud-bottom-right">
+            <div class="telemetry-chip">
+              <div class="t-label">Elbow angle (3D)</div>
+              <div class="t-val" id="hud-elbow3d">--</div>
+              <div class="t-note" id="hud-elbow-arm">&nbsp;</div>
+            </div>
+            <div class="telemetry-chip">
+              <div class="t-label">Side camera reads</div>
+              <div class="t-val" id="hud-elbow2d">--</div>
+              <div class="t-note" id="hud-elbow-diff">&nbsp;</div>
+            </div>
+            <div class="telemetry-chip">
+              <div class="t-label">Body roll</div>
+              <div class="t-val" id="hud-roll">--</div>
+              <div class="t-note" id="hud-roll-side">&nbsp;</div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div style="margin-bottom:6px;"><span class="pill-label" style="color:var(--cyan);">Coach cut: pick a step, or let it play through</span></div>
+          <div class="step-strip" id="step-strip"></div>
+        </div>
+
+        <div class="controls-bar">
+          <div class="scrubber-row">
+            <button id="btn-play" class="btn" type="button" style="min-width: 76px; justify-content:center;">Pause</button>
+            <input id="scrubber" class="scrubber-slider" type="range" min="0" max="1000" value="0" />
+            <span class="time-readout" id="time-readout"></span>
+          </div>
+          <div class="camera-and-speed">
+            <div class="pill-group" id="cam-buttons">
+              <span class="pill-label">Camera:</span>
+              <button class="chip-btn" data-cam="side" type="button">Side</button>
+              <button class="chip-btn" data-cam="front" type="button">Head-on</button>
+              <button class="chip-btn" data-cam="above" type="button">Above</button>
+              <button class="chip-btn" data-cam="arm" type="button">Right arm</button>
+              <button class="chip-btn" data-cam="wide" type="button">Wide</button>
+            </div>
+            <div class="pill-group">
+              <span class="pill-label">Speed:</span>
+              <button class="chip-btn speed-btn" data-speed="0.5" type="button">0.5x</button>
+              <button class="chip-btn speed-btn active" data-speed="1" type="button">1x</button>
+              <button class="chip-btn speed-btn" data-speed="1.5" type="button">1.5x</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="analytics-column">
+        <div class="panel-card">
+          <h2>Stroke report</h2>
+          <p class="panel-sub">Measured on the 3D body across one full stroke loop.</p>
+          <table class="report-table">
+            <thead id="report-head"><tr><th>Check</th><th>You</th><th>Target</th></tr></thead>
+            <tbody id="report-body"></tbody>
+          </table>
+          <p class="table-footnote" id="report-note">Modeled demo stroke. Targets are coaching guidelines, not lab norms.</p>
+        </div>
+
+        <div class="note-banner">
+          <div><strong>Why two elbow numbers?</strong> A side camera flattens the stroke, so it reads a different elbow angle than the real one in 3D. The readouts on the stage show both, live.</div>
+          <div><strong>Use another character.</strong> Drop a Mixamo-rigged .glb onto the stage, or pick a file. Mixamo-rigged characters only.</div>
+          <div><button id="btn-upload" class="btn" type="button">Load Mixamo character (.glb)</button>
+            <input id="glb-file-input" type="file" accept=".glb" style="display:none" />
+            <button id="btn-stroke" class="btn" type="button">Load stroke3d.json</button>
+            <input id="stroke-file-input" type="file" accept=".json,application/json" style="display:none" /></div>
+        </div>
+      </aside>
+    </main>
+  </div>
+  <div id="toast" class="toast"></div>
+
+  <script id="xbot-glb" type="text/plain">__XBOT_B64__</script>
+  <script>/*__THREE__*/</script>
+  <script>/*__ORBIT__*/</script>
+  <script>/*__GLTF__*/</script>
+  <script>
+  'use strict';
+  // ===========================================================================
+  // 1. SCENE
+  // ===========================================================================
+  const container = document.getElementById('three-canvas-container');
+  const shell = document.getElementById('viewport-shell');
+  const overlayCanvas = document.getElementById('overlay-canvas');
+  const overlayCtx = overlayCanvas.getContext('2d');
+  const FOG_COLOR = 0x020c14;
+  const WATER_Y = 0.06;
+  const FLOOR_Y = -1.28;
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(FOG_COLOR);
+  scene.fog = new THREE.FogExp2(FOG_COLOR, 0.13);
+
+  const camera = new THREE.PerspectiveCamera(38, container.clientWidth / container.clientHeight, 0.1, 40);
+  camera.position.set(0.0, -0.1, 3.0);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.1;
+  container.appendChild(renderer.domElement);
+
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.07;
+  controls.target.set(-0.3, -0.15, 0.0);
+  controls.maxDistance = 8;
+  controls.minDistance = 0.9;
+
+  scene.add(new THREE.HemisphereLight(0x67e8f9, 0x041e2e, 0.78));
+  const overheadSun = new THREE.DirectionalLight(0xa5f3fc, 1.38);
+  overheadSun.position.set(0.8, 4.5, 1.5);
+  scene.add(overheadSun);
+  const sideSculptLight = new THREE.DirectionalLight(0xe0f2fe, 0.72);
+  sideSculptLight.position.set(-1.4, 0.5, 2.8);
+  scene.add(sideSculptLight);
+  const underBounce = new THREE.PointLight(0x06b6d4, 0.95, 5.5);
+  underBounce.position.set(0.0, -1.25, 0.5);
+  scene.add(underBounce);
+
+  const uTime = { value: 0 };
+  const uSwimOffset = { value: 0 };
+
+  function createTrunksLogoTexture() {
+    const c = document.createElement('canvas');
+    c.width = 512; c.height = 256;
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, 512, 256);
+    ctx.fillStyle = '#dce6ef';
+    ctx.font = '900 72px Inter, Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('SwimForm', 256, 128);
+    const tex = new THREE.CanvasTexture(c);
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  // Trunks are painted in the character's rest pose. The frame they are painted in
+  // (hip origin, up/left/forward, units per meter) is measured from each loaded rig.
+  const trunkUniforms = {
+    uLogoTex: { value: createTrunksLogoTexture() },
+    uBodyO: { value: new THREE.Vector3(0, 1, 0) },
+    uBodyUp: { value: new THREE.Vector3(0, 1, 0) },
+    uBodyLeft: { value: new THREE.Vector3(1, 0, 0) },
+    uBodyFwd: { value: new THREE.Vector3(0, 0, 1) },
+    uUnit: { value: 1 }
+  };
+
+  function createSwimmerMaterial() {
+    const mat = new THREE.MeshStandardMaterial({ color: 0xd8e2e8, roughness: 0.40, metalness: 0.05, skinning: true });
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uTime = uTime;
+      Object.assign(shader.uniforms, trunkUniforms);
+      shader.vertexShader = `
+        varying vec3 vRestPos;
+        varying vec3 vWorldPos;
+        varying vec3 vWorldNorm;
+      ` + shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         vRestPos = position;`
+      ).replace(
+        '#include <worldpos_vertex>',
+        `#include <worldpos_vertex>
+         vWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+         vWorldNorm = normalize(mat3(modelMatrix) * objectNormal);`
+      );
+      shader.fragmentShader = `
+        uniform float uTime;
+        uniform sampler2D uLogoTex;
+        uniform vec3 uBodyO;
+        uniform vec3 uBodyUp;
+        uniform vec3 uBodyLeft;
+        uniform vec3 uBodyFwd;
+        uniform float uUnit;
+        varying vec3 vRestPos;
+        varying vec3 vWorldPos;
+        varying vec3 vWorldNorm;
+        float causticPattern(vec2 uv, float t) {
+          vec2 p = uv * 4.2;
+          float c1 = sin(p.x * 3.1 + t * 1.7 + cos(p.y * 2.7 - t * 1.3));
+          float c2 = sin(p.y * 3.5 - t * 1.5 + cos(p.x * 2.9 + t * 1.9));
+          float v = pow(abs(c1 * c2), 2.2);
+          return smoothstep(0.18, 0.85, v);
+        }
+      ` + shader.fragmentShader.replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+         vec3 rel = (vRestPos - uBodyO) / uUnit;
+         float bh = dot(rel, uBodyUp);
+         float bx = dot(rel, uBodyLeft);
+         float bz = dot(rel, uBodyFwd);
+         float waistLine = -0.015 - 0.015 * cos(bx * 18.0);
+         float thighHem  = -0.405;
+         float inTrunks  = smoothstep(thighHem - 0.012, thighHem + 0.012, bh) *
+                           (1.0 - smoothstep(waistLine - 0.012, waistLine + 0.012, bh));
+         vec3 trunkCol = vec3(0.055, 0.075, 0.105);
+         float waistTrim = exp(-pow((bh - waistLine + 0.018) / 0.008, 2.0));
+         float hemTrim   = exp(-pow((bh - thighHem - 0.015) / 0.007, 2.0));
+         trunkCol += vec3(0.08, 0.12, 0.16) * (waistTrim + hemTrim) * inTrunks;
+         if (inTrunks > 0.5 && abs(bx) > 0.105 && bh > -0.36 && bh < -0.13 && abs(bz) < 0.058) {
+           float uLogo = (bh + 0.36) / 0.23;
+           float vLogo = 1.0 - (bz + 0.058) / 0.116;
+           if (bx > 0.0) uLogo = 1.0 - uLogo;
+           vec4 logoSample = texture2D(uLogoTex, vec2(uLogo, vLogo));
+           trunkCol = mix(trunkCol, vec3(0.84, 0.89, 0.94), logoSample.a * 0.9);
+         }
+         diffuseColor.rgb = mix(diffuseColor.rgb, trunkCol, inTrunks);`
+      ).replace(
+        '#include <dithering_fragment>',
+        `float cTop = causticPattern(vWorldPos.xz + vec2(vWorldPos.y * 0.35), uTime);
+         float cUnder = causticPattern(vWorldPos.xz * 1.15 - vec2(uTime * 0.12), uTime * 0.9);
+         float topMask = clamp(vWorldNorm.y * 0.65 + 0.35, 0.0, 1.0);
+         float underMask = clamp(-vWorldNorm.y * 0.75 + 0.25, 0.0, 1.0);
+         gl_FragColor.rgb += vec3(0.08, 0.78, 0.92) * (cTop * topMask * 0.12 + cUnder * underMask * 0.10);
+         #include <dithering_fragment>`
+      );
+    };
+    return mat;
+  }
+  const swimmerMaterial = createSwimmerMaterial();
+
+  // Pool floor: follows the camera so every shot has tiles under it; fades into the water with camera distance.
+  const poolFloorGeo = new THREE.PlaneGeometry(44, 44, 1, 1);
+  poolFloorGeo.rotateX(-Math.PI / 2);
+  const poolFloor = new THREE.Mesh(poolFloorGeo, new THREE.ShaderMaterial({
+    uniforms: { uTime, uSwimOffset, uFogColor: { value: new THREE.Color(FOG_COLOR) } },
+    vertexShader: `
+      varying vec3 vWorldPos;
+      void main() {
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorldPos = wp.xyz;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }`,
+    fragmentShader: `
+      uniform float uTime;
+      uniform float uSwimOffset;
+      uniform vec3 uFogColor;
+      varying vec3 vWorldPos;
+      float poolCaustics(vec2 p, float t) {
+        vec2 uv = p * 1.85;
+        float w1 = sin(uv.x * 2.8 + t * 1.6 + sin(uv.y * 2.3 - t * 1.2));
+        float w2 = cos(uv.y * 3.1 - t * 1.4 + sin(uv.x * 2.6 + t * 1.8));
+        float w3 = sin((uv.x + uv.y) * 2.2 + t * 1.1);
+        float net = abs(w1 + w2 + w3 * 0.5);
+        return pow(clamp(1.0 - abs(net - 0.95), 0.0, 1.0), 5.5);
+      }
+      void main() {
+        vec2 xz = vec2(vWorldPos.x + uSwimOffset, vWorldPos.z);
+        vec2 tileUV = fract(xz / 0.28);
+        float grout = step(0.045, tileUV.x) * step(0.045, tileUV.y) * step(tileUV.x, 0.955) * step(tileUV.y, 0.955);
+        vec3 tileColor = mix(vec3(0.015, 0.075, 0.105), vec3(0.032, 0.145, 0.195), grout);
+        float laneLine = 1.0 - smoothstep(0.135, 0.15, abs(vWorldPos.z));
+        tileColor = mix(tileColor, vec3(0.012, 0.018, 0.025), laneLine * 0.94);
+        float c1 = poolCaustics(xz, uTime);
+        float c2 = poolCaustics(xz * 1.35 + vec2(1.7, -0.9), uTime * 1.15);
+        float caustic = (c1 * 0.75 + c2 * 0.55) * (1.0 - laneLine * 0.55);
+        vec3 col = tileColor + vec3(0.06, 0.82, 0.96) * caustic * 0.43;
+        float d = distance(vWorldPos, cameraPosition);
+        float fade = exp(-pow(d * 0.105, 2.0));
+        gl_FragColor = vec4(mix(uFogColor, col, fade), 1.0);
+      }`
+  }));
+  poolFloor.position.y = FLOOR_Y;
+  scene.add(poolFloor);
+
+  const waterSurfaceGeo = new THREE.PlaneGeometry(44, 44);
+  waterSurfaceGeo.rotateX(Math.PI / 2);
+  const waterSurface = new THREE.Mesh(waterSurfaceGeo,
+    new THREE.MeshBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.09, side: THREE.DoubleSide, depthWrite: false }));
+  waterSurface.position.y = WATER_Y;
+  scene.add(waterSurface);
+
+  const lightRays = new THREE.Group();
+  for (let i = 0; i < 6; i++) {
+    const ray = new THREE.Mesh(
+      new THREE.ConeGeometry(0.34 + (i % 2) * 0.16, 1.45, 16, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.032, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending })
+    );
+    ray.position.set(-1.9 + i * 0.78, -0.62, -0.75 + (i % 3) * 0.3);
+    ray.rotation.z = -0.22;
+    ray.rotation.x = 0.08;
+    lightRays.add(ray);
+  }
+  scene.add(lightRays);
+
+  const PARTICLES = 140;
+  const pPos = new Float32Array(PARTICLES * 3);
+  for (let i = 0; i < PARTICLES; i++) {
+    pPos[i * 3]     = (Math.random() - 0.5) * 6.0;
+    pPos[i * 3 + 1] = FLOOR_Y + 0.08 + Math.random() * 1.2;
+    pPos[i * 3 + 2] = (Math.random() - 0.5) * 2.6;
+  }
+  const particleGeo = new THREE.BufferGeometry();
+  particleGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+  scene.add(new THREE.Points(particleGeo, new THREE.PointsMaterial({ color: 0x67e8f9, size: 0.018, transparent: true, opacity: 0.45 })));
+
+  // ===========================================================================
+  // 2. STROKE MODEL  (swimmer heads +X, up is +Y, swimmer's right side is +Z)
+  // ===========================================================================
+  const DEG = Math.PI / 180;
+  const STROKE_PERIOD = 1.4;
+  const UPPER_ARM = 0.30, FOREARM = 0.27;
+  const THIGH = 0.44, SHIN = 0.43;
+  const SHOULDER_HALF = 0.18, HIP_HALF = 0.09;
+  const NECK_ANCHOR = new THREE.Vector3(0.33, -0.10, 0);
+  const CATCH_SAMPLE = 0.30;   // arm phase at which the catch is measured (end of catch, start of pull)
+  const PHASES = [[0.12, 'entry'], [0.30, 'catch'], [0.50, 'pull'], [0.62, 'push'], [1.01, 'recovery']];
+  const phaseName = (u) => PHASES.find(p => u < p[0])[1];
+
+  // Wrist keyframes: [arm phase, forward, up, outward], in meters from the shoulder.
+  const PROFILES = {
+    target: {
+      rollR: 40, rollL: 40, pitch: 2,
+      kickAmp: 9, kneeMin: 2, kneeMax: 16,
+      poleWater: [0.35, 0.85, 0.40], poleAir: [0.0, 1.0, 0.5],
+      palmBack: [0.10, 0.24],
+      keys: [
+        [0.00,  0.45,  0.04,  0.00],
+        [0.12,  0.555, -0.05, 0.00],
+        [0.21,  0.44, -0.20,  0.00],
+        [0.30,  0.28, -0.34,  0.00],
+        [0.40,  0.03, -0.41, -0.03],
+        [0.50, -0.22, -0.36, -0.02],
+        [0.62, -0.50, -0.12,  0.06],
+        [0.72, -0.36,  0.10,  0.20],
+        [0.82,  0.00,  0.17,  0.26],
+        [0.92,  0.30,  0.13,  0.12]
+      ]
+    },
+    you: {
+      rollR: 28, rollL: 20, pitch: 9,
+      kickAmp: 12, kneeMin: 5, kneeMax: 34,
+      poleWater: [-0.5, -0.6, 0.6], poleAir: [0.0, 0.8, 0.8],
+      palmBack: [0.22, 0.40],
+      keys: [
+        [0.00,  0.42,  0.04, -0.18],
+        [0.12,  0.52, -0.04, -0.15],
+        [0.21,  0.50, -0.20, -0.08],
+        [0.30,  0.405, -0.375, -0.03],
+        [0.40,  0.10, -0.52,  0.00],
+        [0.50, -0.20, -0.46,  0.02],
+        [0.62, -0.52, -0.12,  0.08],
+        [0.72, -0.34,  0.06,  0.26],
+        [0.82,  0.00,  0.10,  0.36],
+        [0.92,  0.30,  0.10,  0.06]
+      ]
+    }
+  };
+
+  const frac = (x) => x - Math.floor(x);
+  const sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+  // Periodic Catmull-Rom through non-uniformly spaced keyframes.
+  function wristSpline(keys, u) {
+    const n = keys.length;
+    let i = 0;
+    for (let k = 0; k < n; k++) if (keys[k][0] <= u) i = k;
+    const K = (j) => keys[((j % n) + n) % n];
+    const T = (j) => K(j)[0] + Math.floor(j / n);
+    const t0 = T(i), t1 = T(i + 1), h = t1 - t0, s = (u - t0) / h;
+    const s2 = s * s, s3 = s2 * s, out = [0, 0, 0];
+    for (let c = 1; c <= 3; c++) {
+      const p0 = K(i)[c], p1 = K(i + 1)[c];
+      const m0 = (p1 - K(i - 1)[c]) / (t1 - T(i - 1)) * h;
+      const m1 = (K(i + 2)[c] - p0) / (T(i + 2) - t0) * h;
+      out[c - 1] = (2 * s3 - 3 * s2 + 1) * p0 + (s3 - 2 * s2 + s) * m0 + (-2 * s3 + 3 * s2) * p1 + (s3 - s2) * m1;
+    }
+    return out;
+  }
+
+  function solveElbow(S, W, pole) {
+    const axis = W.clone().sub(S);
+    const d = axis.length();
+    axis.divideScalar(d);
+    const a = (UPPER_ARM * UPPER_ARM - FOREARM * FOREARM + d * d) / (2 * d);
+    const h = Math.sqrt(Math.max(UPPER_ARM * UPPER_ARM - a * a, 0));
+    const perp = pole.clone().addScaledVector(axis, -pole.dot(axis)).normalize();
+    return S.clone().addScaledVector(axis, a).addScaledVector(perp, h);
+  }
+
+  function bodyFrame(a, n0, phi) {
+    const c = Math.cos(phi), s = Math.sin(phi);
+    const right = V(0, 0, 1).multiplyScalar(c).addScaledVector(n0, s);
+    const dorsal = n0.clone().multiplyScalar(c).addScaledVector(V(0, 0, 1), -s);
+    return { right, dorsal };
+  }
+
+  // th = right-arm stroke phase (0..1). Returns the full-body pose for one profile.
+  function computePose(profileKey, th, torsoLen) {
+    const P = PROFILES[profileKey];
+    th = frac(th);
+    const c = Math.cos(2 * Math.PI * (th - 0.8));
+    const roll = (c >= 0 ? P.rollR : P.rollL) * c * DEG;       // + = right side up
+    const hipRoll = roll * 0.7;
+    const pitch = P.pitch * DEG;
+    const a = V(Math.cos(pitch), Math.sin(pitch), 0);            // hips -> head
+    const n0 = V(-Math.sin(pitch), Math.cos(pitch), 0);
+    const shF = bodyFrame(a, n0, roll), hipF = bodyFrame(a, n0, hipRoll);
+    const neck = NECK_ANCHOR.clone();
+    const pelvis = neck.clone().addScaledVector(a, -torsoLen);
+
+    const breath = sstep(0.64, 0.74, th) * (1 - sstep(0.86, 0.97, th));
+    const headRoll = breath * 78 * DEG;
+
+    const arms = {};
+    for (const side of [1, -1]) {
+      const u = frac(th + (side > 0 ? 0 : 0.5));
+      const S = neck.clone().addScaledVector(shF.right, side * SHOULDER_HALF);
+      const k = wristSpline(P.keys, u);
+      const rel = V(k[0], k[1], side * k[2]);
+      rel.setLength(Math.max(0.14, Math.min(UPPER_ARM + FOREARM - 0.004, rel.length())));
+      const W = S.clone().add(rel);
+      const wAir = sstep(0.56, 0.68, u) * (1 - sstep(0.93, 1.0, u));
+      const pole = V(
+        P.poleWater[0] + (P.poleAir[0] - P.poleWater[0]) * wAir,
+        P.poleWater[1] + (P.poleAir[1] - P.poleWater[1]) * wAir,
+        side * (P.poleWater[2] + (P.poleAir[2] - P.poleWater[2]) * wAir)).normalize();
+      const E = solveElbow(S, W, pole);
+      const wBack = sstep(P.palmBack[0], P.palmBack[1], u) * (1 - sstep(0.58, 0.68, u));
+      const wRelax = sstep(0.62, 0.72, u) * (1 - sstep(0.90, 1.0, u));
+      arms[side > 0 ? 'R' : 'L'] = { u, S, E, W, pole, wBack, wRelax, wDown: Math.max(0, 1 - wBack - wRelax) };
+    }
+
+    const legs = {};
+    for (const side of [1, -1]) {
+      const kph = 2 * Math.PI * 3 * th + (side > 0 ? 0 : Math.PI);
+      const hipA = P.kickAmp * DEG * Math.sin(kph);
+      const knee = (P.kneeMin + (P.kneeMax - P.kneeMin) * (0.5 + 0.5 * Math.sin(kph - 0.3))) * DEG;
+      const H = pelvis.clone().addScaledVector(hipF.right, side * HIP_HALF);
+      const thigh = a.clone().multiplyScalar(-Math.cos(hipA)).addScaledVector(hipF.dorsal, Math.sin(hipA));
+      const shin = a.clone().multiplyScalar(-Math.cos(hipA + knee)).addScaledVector(hipF.dorsal, Math.sin(hipA + knee));
+      const K = H.clone().addScaledVector(thigh, THIGH);
+      const A = K.clone().addScaledVector(shin, SHIN);
+      legs[side > 0 ? 'R' : 'L'] = { H, K, A, thigh, shin };
+    }
+    return { profileKey, th, roll, hipRoll, pitch, a, shF, hipF, neck, pelvis, headRoll, arms, legs };
+  }
+
+  // ===========================================================================
+  // 3. RIG: load, measure rest pose, aim bones
+  // ===========================================================================
+  const REQUIRED_BONES = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head',
+    'LeftArm', 'LeftForeArm', 'LeftHand', 'RightArm', 'RightForeArm', 'RightHand',
+    'LeftUpLeg', 'LeftLeg', 'LeftFoot', 'LeftToeBase', 'RightUpLeg', 'RightLeg', 'RightFoot', 'RightToeBase'];
+  // bone -> the child whose position defines the bone's rest direction
+  const AIM_CHILD = {
+    Spine: 'Spine1', Spine1: 'Spine2', Spine2: 'Neck', Neck: 'Head', Head: 'HeadTop_End',
+    LeftArm: 'LeftForeArm', LeftForeArm: 'LeftHand', LeftHand: 'LeftHandMiddle1',
+    RightArm: 'RightForeArm', RightForeArm: 'RightHand', RightHand: 'RightHandMiddle1',
+    LeftUpLeg: 'LeftLeg', LeftLeg: 'LeftFoot', LeftFoot: 'LeftToeBase',
+    RightUpLeg: 'RightLeg', RightLeg: 'RightFoot', RightFoot: 'RightToeBase'
+  };
+
+  const REF_TORSO = 0.47;   // hips-to-neck length (m) of the body the trunks pattern was drawn for
+  const swimmerRoot = new THREE.Group();
+  scene.add(swimmerRoot);
+  const targetRoot = new THREE.Group();
+  targetRoot.visible = false;
+  scene.add(targetRoot);
+  let rig = null;
+  let targetRig = null;
+
+  function buildRig(gltfScene) {
+    const bones = {};
+    let firstSkin = null;
+    gltfScene.traverse((o) => {
+      if (o.isSkinnedMesh && !firstSkin) firstSkin = o;
+      if (o.isBone || /^mixamorig/.test(o.name || '')) bones[o.name.replace(/^mixamorig[:_]?\d*/, '')] = o;
+    });
+    if (!firstSkin || REQUIRED_BONES.some(n => !bones[n])) return null;
+
+    const holder = new THREE.Group();
+    holder.add(gltfScene);
+    holder.updateMatrixWorld(true);
+
+    const wpos = (b) => b.getWorldPosition(new THREE.Vector3());
+    const wquat = (b) => b.getWorldQuaternion(new THREE.Quaternion());
+
+    // Rest body frame, measured from hips, neck and shoulders.
+    const hipsRest = wpos(bones.Hips);
+    const up = wpos(bones.Neck).sub(hipsRest);
+    const restTorso = up.length();
+    up.normalize();
+    const left = wpos(bones.LeftArm).sub(wpos(bones.RightArm));
+    left.addScaledVector(up, -left.dot(up)).normalize();
+    const fwd = new THREE.Vector3().crossVectors(left, up).normalize();
+    const restBasis = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(left, up, fwd));
+
+    const restArm = wpos(bones.LeftForeArm).distanceTo(wpos(bones.LeftArm)) + wpos(bones.LeftHand).distanceTo(wpos(bones.LeftForeArm));
+    const scale = (UPPER_ARM + FOREARM) / restArm;
+
+    const drive = {};
+    for (const name of Object.keys(AIM_CHILD)) {
+      const b = bones[name];
+      const child = bones[AIM_CHILD[name]];
+      let dir;
+      if (child) dir = wpos(child).sub(wpos(b)).normalize();
+      else if (name === 'Head') dir = up.clone();
+      else dir = wpos(b).sub(wpos(b.parent)).normalize();
+      // secondary rest axis: elbow folds toward the chest in the rest pose; palms face the floor
+      let sec = null;
+      if (/Arm$/.test(name) && !/Fore/.test(name)) sec = fwd.clone();
+      else if (/ForeArm$|Hand$/.test(name)) sec = up.clone().negate();
+      const invParent = wquat(b.parent).invert();
+      const d = {
+        bone: b,
+        restQ: b.quaternion.clone(),
+        axisP: dir.clone().applyQuaternion(invParent).normalize(),
+        axisL: dir.clone().applyQuaternion(wquat(b).invert()).normalize(),
+        secP: null
+      };
+      if (sec) {
+        sec.addScaledVector(dir, -sec.dot(dir)).normalize();
+        d.secP = sec.applyQuaternion(invParent).normalize();
+      }
+      drive[name] = d;
+    }
+    // Sign linking "direction the elbow folds" to "which way the palm faces" for each arm.
+    const palmSign = {};
+    for (const [key, name] of [['L', 'LeftForeArm'], ['R', 'RightForeArm']]) {
+      const dir = wpos(bones[AIM_CHILD[name]]).sub(wpos(bones[name])).normalize();
+      palmSign[key] = Math.sign(up.clone().negate().dot(new THREE.Vector3().crossVectors(dir, fwd))) || 1;
+    }
+
+    // Frame the trunks are painted in (the skinned mesh's own rest space).
+    // rest-pose vertex -> model space is hipsWorld * hipsInverseBind * bindMatrix
+    const hipIdx = firstSkin.skeleton.bones.indexOf(bones.Hips);
+    const inv = new THREE.Matrix4().copy(bones.Hips.matrixWorld);
+    if (hipIdx >= 0) inv.multiply(firstSkin.skeleton.boneInverses[hipIdx]).multiply(firstSkin.bindMatrix);
+    inv.invert();
+    const o = hipsRest.clone().applyMatrix4(inv);
+    const trunks = {
+      o,
+      up: up.clone().transformDirection(inv),
+      left: left.clone().transformDirection(inv),
+      fwd: fwd.clone().transformDirection(inv),
+      unit: hipsRest.clone().add(up).applyMatrix4(inv).distanceTo(o) * (restTorso / REF_TORSO)
+    };
+
+    gltfScene.traverse((o2) => { if (o2.isMesh) { o2.material = swimmerMaterial; o2.frustumCulled = false; } });
+
+    // relax the fingers into a paddle
+    ['LeftHand', 'RightHand'].forEach(prefix => ['Index', 'Middle', 'Ring', 'Pinky'].forEach(f => {
+      for (let k = 1; k <= 3; k++) { const b = bones[`${prefix}${f}${k}`]; if (b) b.rotation.z += prefix === 'LeftHand' ? -0.05 : 0.05; }
+    }));
+
+    return { holder, bones, drive, hipsRest, restBasis, scale, restTorso, restArm, torsoLen: restTorso * scale, palmSign, trunks };
+  }
+
+  function useTargetRig(newRig) {
+    if (targetRig) targetRoot.remove(targetRig.holder);
+    targetRig = newRig;
+    targetRoot.add(targetRig.holder);
+    targetRoot.visible = state.mode === 'side';
+  }
+
+  function useRig(newRig) {
+    if (rig) swimmerRoot.remove(rig.holder);
+    rig = newRig;
+    swimmerRoot.add(rig.holder);
+    trunkUniforms.uBodyO.value.copy(rig.trunks.o);
+    trunkUniforms.uBodyUp.value.copy(rig.trunks.up);
+    trunkUniforms.uBodyLeft.value.copy(rig.trunks.left);
+    trunkUniforms.uBodyFwd.value.copy(rig.trunks.fwd);
+    trunkUniforms.uUnit.value = rig.trunks.unit;
+    const res = runStrokeCheck(rig);
+    fillReport(res.report);
+    window.__swimformCheck = res;
+    document.body.dataset.check = JSON.stringify(res);
+    if (state.realData) rebuildRealReport();
+  }
+
+  const _qp = new THREE.Quaternion(), _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
+  const _t = new THREE.Vector3(), _s0 = new THREE.Vector3(), _sT = new THREE.Vector3(), _cr = new THREE.Vector3();
+
+  // Reset the bone to its rest rotation, then swing it so its rest direction points along `dir` (world).
+  // `sec` (world) optionally fixes the roll about that direction; `twist` adds a roll about it (radians).
+  function aimBone(d, dir, sec, twist) {
+    d.bone.parent.getWorldQuaternion(_qp).invert();
+    _t.copy(dir).normalize().applyQuaternion(_qp);
+    _q1.setFromUnitVectors(d.axisP, _t);
+    if (sec && d.secP) {
+      _s0.copy(d.secP).applyQuaternion(_q1);
+      _sT.copy(sec).applyQuaternion(_qp);
+      _sT.addScaledVector(_t, -_sT.dot(_t));
+      if (_sT.lengthSq() > 1e-6) {
+        _sT.normalize();
+        const ang = Math.atan2(_cr.crossVectors(_s0, _sT).dot(_t), _s0.dot(_sT));
+        _q1.premultiply(_q2.setFromAxisAngle(_t, ang));
+      }
+    }
+    if (twist) _q1.premultiply(_q2.setFromAxisAngle(_t, twist));
+    d.bone.quaternion.copy(_q1).multiply(d.restQ);
+  }
+
+  const _m = new THREE.Matrix4(), _qb = new THREE.Quaternion();
+  function applyPose(r, pose) {
+    const D = r.drive;
+    // root: rest body frame -> hip frame
+    const hipLeft = pose.hipF.right.clone().negate();
+    const hipFwd = pose.hipF.dorsal.clone().negate();
+    _qb.setFromRotationMatrix(_m.makeBasis(hipLeft, pose.a, hipFwd));
+    r.holder.quaternion.copy(_qb).multiply(_q2.copy(r.restBasis).invert());
+    r.holder.scale.setScalar(r.scale);
+    r.holder.position.copy(pose.pelvis).sub(r.hipsRest.clone().multiplyScalar(r.scale).applyQuaternion(r.holder.quaternion));
+    for (const k in D) D[k].bone.quaternion.copy(D[k].restQ);
+    r.holder.updateMatrixWorld(true);
+
+    // spine carries the extra shoulder roll; the head stays still except to breathe
+    const spineTwist = -(pose.roll - pose.hipRoll) / 3;
+    aimBone(D.Spine, pose.a, null, spineTwist);
+    aimBone(D.Spine1, pose.a, null, spineTwist);
+    aimBone(D.Spine2, pose.a, null, spineTwist);
+    const headTwist = -(pose.headRoll - pose.roll) / 2;
+    aimBone(D.Neck, pose.a, null, headTwist);
+    aimBone(D.Head, pose.a, null, headTwist);
+
+    for (const [key, pre] of [['L', 'Left'], ['R', 'Right']]) {
+      const arm = pose.arms[key];
+      const d1 = arm.E.clone().sub(arm.S).normalize();
+      const d2 = arm.W.clone().sub(arm.E).normalize();
+      const fold = arm.pole.clone().negate();
+      const natural = new THREE.Vector3().crossVectors(d2, fold).multiplyScalar(r.palmSign[key]).normalize();
+      const palm = V(0, -arm.wDown, 0).add(V(-arm.wBack, 0, 0)).addScaledVector(natural, arm.wRelax).normalize();
+      const forePalm = natural.clone().add(palm).normalize();
+      aimBone(D[pre + 'Arm'], d1, fold, 0);
+      aimBone(D[pre + 'ForeArm'], d2, forePalm, 0);
+      aimBone(D[pre + 'Hand'], d2, palm, 0);
+    }
+    for (const [key, pre] of [['L', 'Left'], ['R', 'Right']]) {
+      const leg = pose.legs[key];
+      aimBone(D[pre + 'UpLeg'], leg.thigh, null, 0);
+      aimBone(D[pre + 'Leg'], leg.shin, null, 0);
+      aimBone(D[pre + 'Foot'], leg.shin, null, 0);
+    }
+    r.holder.updateMatrixWorld(true);
+    return readJoints(r);
+  }
+
+  function readJoints(r) {
+    const B = r.bones, p = (b) => b.getWorldPosition(new THREE.Vector3());
+    const tip = (hand) => {
+      const m = B[hand + 'Middle3'] || B[hand + 'Middle2'] || B[hand + 'Middle1'];
+      return m ? p(m) : p(B[hand]);
+    };
+    return {
+      hips: p(B.Hips), neck: p(B.Neck), head: p(B.Head),
+      rSh: p(B.RightArm), rEl: p(B.RightForeArm), rWr: p(B.RightHand), rTip: tip('RightHand'),
+      lSh: p(B.LeftArm), lEl: p(B.LeftForeArm), lWr: p(B.LeftHand), lTip: tip('LeftHand'),
+      rHip: p(B.RightUpLeg), rKn: p(B.RightLeg), rAn: p(B.RightFoot), rToe: p(B.RightToeBase),
+      lHip: p(B.LeftUpLeg), lKn: p(B.LeftLeg), lAn: p(B.LeftFoot), lToe: p(B.LeftToeBase)
+    };
+  }
+
+  // ===========================================================================
+  // 4. MEASUREMENTS (always from the rig's bone positions)
+  // ===========================================================================
+  const RAD = 180 / Math.PI;
+  function angleAt(a, b, c) { return a.clone().sub(b).angleTo(c.clone().sub(b)) * RAD; }
+  function angleAtSideCamera(a, b, c) {   // the side camera cannot see depth (Z)
+    return V(a.x - b.x, a.y - b.y, 0).angleTo(V(c.x - b.x, c.y - b.y, 0)) * RAD;
+  }
+  function measure(j) {
+    const axis = j.neck.clone().sub(j.hips).normalize();
+    const level = new THREE.Vector3().crossVectors(axis, V(0, 1, 0)).normalize();   // swimmer's right when flat
+    const upP = new THREE.Vector3().crossVectors(level, axis);
+    const sh = j.rSh.clone().sub(j.lSh);
+    sh.addScaledVector(axis, -sh.dot(axis));
+    const midSh = j.rSh.clone().add(j.lSh).multiplyScalar(0.5);
+    const midHip = j.rHip.clone().add(j.lHip).multiplyScalar(0.5);
+    const midAn = j.rAn.clone().add(j.lAn).multiplyScalar(0.5);
+    const line = midSh.clone().sub(midHip);
+    return {
+      elbowR: angleAt(j.rSh, j.rEl, j.rWr), elbowL: angleAt(j.lSh, j.lEl, j.lWr),
+      elbowR2D: angleAtSideCamera(j.rSh, j.rEl, j.rWr), elbowL2D: angleAtSideCamera(j.lSh, j.lEl, j.lWr),
+      roll: Math.atan2(sh.dot(upP), sh.dot(level)) * RAD,
+      hipLine: Math.atan2(line.y, Math.hypot(line.x, line.z)) * RAD,
+      bodyAngle: angleAt(midSh, midHip, midAn),
+      rWristFromCenter: j.rWr.z - j.neck.z,
+      rElbowBelowShoulder: j.rSh.y - j.rEl.y,
+      midSh, midHip, midAn
+    };
+  }
+
+  // Samples one full loop of each profile on the rig. Produces the stroke report and the dev check.
+  function runStrokeCheck(r) {
+    const N = 280, failures = [], report = {}, detail = {};
+    const fail = (msg) => { failures.push(msg); console.error('[stroke check] ' + msg); };
+    for (const key of ['you', 'target']) {
+      const P = PROFILES[key];
+      const segs = { up: [], fore: [], thigh: [], shin: [], mUp: [], mFore: [] };
+      let rollMax = -1e9, rollMin = 1e9, pitchMin = 1e9, pitchMax = -1e9, entryMin = 1e9, mPitchMin = 1e9, mPitchMax = -1e9;
+      for (let i = 0; i < N; i++) {
+        const th = i / N;
+        const pose = computePose(key, th, r.torsoLen);
+        const j = applyPose(r, pose), m = measure(j);
+        segs.up.push(j.rEl.distanceTo(j.rSh), j.lEl.distanceTo(j.lSh));
+        segs.fore.push(j.rWr.distanceTo(j.rEl), j.lWr.distanceTo(j.lEl));
+        segs.thigh.push(j.rKn.distanceTo(j.rHip), j.lKn.distanceTo(j.lHip));
+        segs.shin.push(j.rAn.distanceTo(j.rKn), j.lAn.distanceTo(j.lKn));
+        for (const s of ['R', 'L']) {
+          segs.mUp.push(pose.arms[s].E.distanceTo(pose.arms[s].S));
+          segs.mFore.push(pose.arms[s].W.distanceTo(pose.arms[s].E));
+        }
+        rollMax = Math.max(rollMax, m.roll); rollMin = Math.min(rollMin, m.roll);
+        pitchMin = Math.min(pitchMin, m.hipLine); pitchMax = Math.max(pitchMax, m.hipLine);
+        mPitchMin = Math.min(mPitchMin, pose.pitch); mPitchMax = Math.max(mPitchMax, pose.pitch);
+        if (Math.abs(pose.roll) * RAD > Math.max(P.rollR, P.rollL) + 1e-6) fail(`${key}: modeled roll exceeds its peak at ${th}`);
+        if (th < 0.12) entryMin = Math.min(entryMin, m.rWristFromCenter);
+      }
+      const spread = (a) => Math.max(...a) - Math.min(...a);
+      for (const k in segs) if (spread(segs[k]) > 1e-4) fail(`${key}: ${k} length varies by ${spread(segs[k]).toFixed(5)} m`);
+      if (Math.abs(segs.mUp[0] - UPPER_ARM) > 1e-6 || Math.abs(segs.mFore[0] - FOREARM) > 1e-6) fail(`${key}: solver arm lengths are not ${UPPER_ARM}/${FOREARM}`);
+      if (rollMax > P.rollR + 1.5 || -rollMin > P.rollL + 1.5) fail(`${key}: roll leaves its peaks (${rollMax.toFixed(1)} / ${rollMin.toFixed(1)})`);
+      if (mPitchMax - mPitchMin > 1e-9) fail(`${key}: modeled pitch changes`);
+      if (pitchMax - pitchMin > 1.0) fail(`${key}: hip line varies by ${(pitchMax - pitchMin).toFixed(2)} deg`);
+
+      const mc = measure(applyPose(r, computePose(key, CATCH_SAMPLE, r.torsoLen)));
+      report[key] = { catchElbow: mc.elbowR, catchElbowSide: mc.elbowR2D, rollRight: rollMax, rollLeft: -rollMin, entryCm: entryMin * 100, hipLine: (pitchMin + pitchMax) / 2 };
+      detail[key] = { catchElbowDropCm: mc.rElbowBelowShoulder * 100, upperArm: segs.up[0], forearm: segs.fore[0], lengthSpread: Math.max(spread(segs.up), spread(segs.fore), spread(segs.thigh), spread(segs.shin)) };
+    }
+    if (report.target.catchElbow < 90 || report.target.catchElbow > 110) fail(`target catch elbow ${report.target.catchElbow.toFixed(1)} is outside 90-110`);
+    if (report.you.catchElbow <= 140) fail(`you catch elbow ${report.you.catchElbow.toFixed(1)} is not above 140`);
+    if (Math.abs(detail.target.catchElbowDropCm) > 11) fail(`target catch elbow is ${detail.target.catchElbowDropCm.toFixed(1)} cm from shoulder height`);
+    if (!failures.length) console.info('[stroke check] passed', JSON.stringify({ report, detail }));
+    return { passed: failures.length === 0, failures, report, detail };
+  }
+
+  function fillReport(rep) {
+    const deg = (v) => `${Math.round(v)}°`;
+    const entry = (cm) => cm < 0 ? `${Math.abs(cm).toFixed(0)} cm across` : `${cm.toFixed(0)} cm outside`;
+    const rows = [
+      ['Elbow angle at catch', 'True 3D angle, right arm', deg(rep.you.catchElbow), deg(rep.target.catchElbow)],
+      ['Roll to the right', 'Right side up, peak', deg(rep.you.rollRight), deg(rep.target.rollRight)],
+      ['Roll to the left', 'Left side up, peak', deg(rep.you.rollLeft), deg(rep.target.rollLeft)],
+      ['Hand entry', 'Right hand vs. body center line', entry(rep.you.entryCm), entry(rep.target.entryCm)],
+      ['Hip line', 'Hips below shoulders, from level', deg(rep.you.hipLine), deg(rep.target.hipLine)]
+    ];
+    document.getElementById('report-body').innerHTML = rows.map(r =>
+      `<tr><td><div class="measure-name">${r[0]}</div><div class="measure-sub">${r[1]}</div></td>` +
+      `<td><span class="val-you">${r[2]}</span></td><td><span class="val-target">${r[3]}</span></td></tr>`).join('');
+  }
+
+  // ===========================================================================
+  // 5. COACH CUT: every piece of UI state is read from the active step object
+  // ===========================================================================
+  const STEP_SECONDS = 3.2;
+  const EXPORTS = {
+    all:   { from: 0, to: 8, file: 'swimform-freestyle-reel' },
+    elbow: { from: 0, to: 1, file: 'swimform-reel-elbow' },
+    roll:  { from: 2, to: 3, file: 'swimform-reel-rotation' },
+    entry: { from: 4, to: 5, file: 'swimform-reel-entry' },
+    hips:  { from: 6, to: 7, file: 'swimform-reel-hips' }
+  };
+  function exportSpan() {
+    const id = (document.getElementById('export-range') || {}).value || 'all';
+    return EXPORTS[id] || EXPORTS.all;
+  }
+  const STEPS = [
+    { label: 'Dropped elbow', sub: 'The arm stays almost straight and presses down, so it lifts you instead of moving you forward.',
+      profile: 'you', glow: 'arm', cam: 'arm', window: [0.08, 0.38], speed: 0.3 },
+    { label: 'High elbow', sub: 'The elbow stays near shoulder height while the forearm tips down and pulls straight back.',
+      profile: 'target', glow: 'arm', cam: 'arm', window: [0.08, 0.38], speed: 0.3 },
+    { label: 'Flat rotation', sub: 'The shoulders barely roll, and roll less to one side than the other.',
+      profile: 'you', glow: 'shoulders', cam: 'front', window: [0.55, 1.55], speed: 0.4 },
+    { label: 'Rotate to 40°', sub: 'Roll the same amount to each side so every stroke reaches long.',
+      profile: 'target', glow: 'shoulders', cam: 'front', window: [0.55, 1.55], speed: 0.4 },
+    { label: 'Hand crosses center', sub: 'The hand enters past the middle of the body, which swings the hips sideways.',
+      profile: 'you', glow: 'entry', cam: 'above', window: [0.86, 1.16], speed: 0.3 },
+    { label: 'Enter in line', sub: 'The hand enters in front of its own shoulder and reaches straight ahead.',
+      profile: 'target', glow: 'entry', cam: 'above', window: [0.86, 1.16], speed: 0.3 },
+    { label: 'Hips sinking', sub: 'Hips and legs ride low, so the body pushes more water.',
+      profile: 'you', glow: 'line', cam: 'side', window: [0.0, 1.0], speed: 0.4 },
+    { label: 'Long, flat line', sub: 'Shoulders, hips and heels stay close to the surface.',
+      profile: 'target', glow: 'line', cam: 'side', window: [0.0, 1.0], speed: 0.4 },
+    { label: 'Now put it together', sub: 'High elbow, even rotation, in-line entry and a flat body line, at full speed.',
+      profile: 'target', glow: null, cam: 'orbit', window: [0.0, 1.0], speed: 1.0 }
+  ];
+  const TOTAL_SECONDS = STEPS.length * STEP_SECONDS;
+  const stepKind = (st) => !st.glow ? 'none' : (st.profile === 'you' ? 'fault' : 'target');
+
+  // Camera views: where to look, from which direction, and how much must stay in frame (meters).
+  const VIEWS = {
+    arm:   { target: V(0.62, -0.24, 0.22), dir: V(0.75, -0.08, 0.62), halfW: 0.52, halfH: 0.44 },
+    front: { target: V(0.30, -0.10, 0.0),  dir: V(1.0, 0.03, 0.0),    halfW: 0.60, halfH: 0.78 },
+    above: { target: V(0.50, -0.05, 0.0),  dir: V(0.0, 1.0, 0.10),    halfW: 0.78, halfH: 0.52 },
+    side:  { target: V(-0.34, -0.20, 0.0), dir: V(0.0, 0.03, 1.0),    halfW: 1.12, halfH: 0.55 },
+    wide:  { target: V(-0.12, -0.16, 0.0), dir: V(0.25, 0.05, 1.0),   halfW: 1.30, halfH: 0.62 },
+    orbit: { target: V(-0.12, -0.16, 0.0), dir: V(0.0, 0.04, 1.0),    halfW: 1.30, halfH: 0.62, orbit: true }
+  };
+
+  const state = {
+    stepIndex: 0,
+    tau: 0,              // seconds inside the current step
+    coachCut: true,
+    playing: true,
+    speed: 1,
+    mode: null,
+    realData: null,
+    realTime: 0,
+    reel: false,
+    showOverlay: true,
+    manualCam: null,     // key of VIEWS when a camera button is held
+    camFree: false,      // user is dragging the scene
+    orbitAngle: 0.5,
+    exporting: false
+  };
+
+  function strokePhase(step, tau) {
+    const rate = step.speed / STROKE_PERIOD;
+    const [w0, w1] = step.window, len = w1 - w0;
+    if (len >= 1) return w0 + tau * rate;
+    // play the window forward in slow motion, then rewind quickly and repeat
+    const loop = len / rate / 0.88;
+    const x = (tau % loop) / loop;
+    return x < 0.88 ? w0 + (x / 0.88) * len : w1 - sstep(0.88, 1.0, x) * len;
+  }
+
+  const stripEl = document.getElementById('step-strip');
+  STEPS.forEach((st, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `step-chip ${stepKind(st)}`;
+    const who = stepKind(st) === 'none' ? 'TARGET' : st.profile.toUpperCase();
+    b.innerHTML = `<span class="tag">${i + 1} · ${who}</span><span>${st.label}</span>`;
+    b.addEventListener('click', () => goToStep(i, 0));
+    stripEl.appendChild(b);
+  });
+
+  function renderStepUI() {
+    const st = STEPS[state.stepIndex], kind = stepKind(st);
+    const pill = document.getElementById('ref-pill');
+    pill.textContent = st.label;
+    pill.className = `ref-pill ${kind}`;
+    const who = document.getElementById('ref-who');
+    who.textContent = st.profile === 'you' ? 'You' : 'Target';
+    who.className = `ref-who ${st.profile === 'you' ? 'fault' : 'target'}`;
+    document.getElementById('ref-sub-caption').textContent = st.sub;
+    stripEl.querySelectorAll('.step-chip').forEach((el, i) => el.classList.toggle('active', i === state.stepIndex));
+    document.querySelectorAll('#cam-buttons .chip-btn').forEach(b => b.classList.toggle('active', b.dataset.cam === state.manualCam));
+    const cc = document.getElementById('btn-coach-cut');
+    cc.classList.toggle('active', state.coachCut);
+    document.getElementById('coach-cut-label').textContent = state.coachCut ? 'Coach cut playing' : 'Play coach cut';
+    document.getElementById('btn-play').textContent = state.playing ? 'Pause' : 'Play';
+  }
+
+  // Selecting a step (chip, scrubber, coach cut) also returns the camera to that step's view.
+  function goToStep(i, tau) {
+    state.stepIndex = i;
+    state.tau = tau;
+    state.manualCam = null;
+    state.camFree = false;
+    renderStepUI();
+  }
+  function stopCoachCut() { if (state.coachCut) { state.coachCut = false; renderStepUI(); } }
+
+  document.getElementById('btn-coach-cut').addEventListener('click', () => {
+    if (state.mode) {
+      state.mode = null;
+      state.coachCut = true;
+      targetRoot.visible = false;
+      swimmerRoot.position.z = 0;
+      $('step-strip').style.display = '';
+      ['mode-real', 'mode-side', 'mode-target'].forEach((id) => $(id).classList.remove('primary'));
+      state.playing = true;
+      goToStep(state.stepIndex, state.tau % STEP_SECONDS);
+      return;
+    }
+    state.coachCut = !state.coachCut;
+    if (state.coachCut) { state.playing = true; goToStep(state.stepIndex, state.tau % STEP_SECONDS); }
+    else renderStepUI();
+  });
+  document.getElementById('btn-play').addEventListener('click', () => { state.playing = !state.playing; renderStepUI(); });
+  document.getElementById('scrubber').addEventListener('input', (e) => {
+    if (state.realData && state.mode) {
+      state.playing = false;
+      state.realTime = (parseFloat(e.target.value) / 1000) * realDuration();
+      return;
+    }
+    const T = Math.min(TOTAL_SECONDS - 1e-3, (parseFloat(e.target.value) / 1000) * TOTAL_SECONDS);
+    state.playing = false;
+    goToStep(Math.floor(T / STEP_SECONDS), T % STEP_SECONDS);
+  });
+  document.querySelectorAll('#cam-buttons .chip-btn').forEach(btn => btn.addEventListener('click', () => {
+    state.coachCut = false;
+    state.manualCam = btn.dataset.cam;
+    state.camFree = false;
+    renderStepUI();
+  }));
+  document.querySelectorAll('.speed-btn').forEach(btn => btn.addEventListener('click', () => {
+    state.speed = parseFloat(btn.dataset.speed);
+    document.querySelectorAll('.speed-btn').forEach(b => b.classList.toggle('active', b === btn));
+  }));
+  document.getElementById('chk-overlay').addEventListener('change', (e) => { state.showOverlay = e.target.checked; });
+  function setReel(on) {
+    state.reel = on;
+    document.getElementById('chk-reel').checked = on;
+    shell.classList.toggle('reel-mode', on);
+    scene.fog.density = on ? 0.075 : 0.13;   // the reel camera sits further back
+    handleResize();
+  }
+  document.getElementById('chk-reel').addEventListener('change', (e) => setReel(e.target.checked));
+  renderer.domElement.addEventListener('pointerdown', () => {
+    if (state.exporting) return;
+    state.camFree = true;
+    state.manualCam = null;
+    state.coachCut = false;
+    renderStepUI();
+  });
+
+  function handleResize() {
+    const w = container.clientWidth, h = container.clientHeight;
+    if (!w || !h) return;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+  }
+  window.addEventListener('resize', handleResize);
+
+  const _camPos = new THREE.Vector3();
+  function cameraGoal(view) {
+    const tanV = Math.tan(camera.fov * DEG / 2), tanH = tanV * camera.aspect;
+    const dist = Math.min(7.5, Math.max(view.halfH / tanV, view.halfW / tanH) * 1.08);
+    const dir = view.dir.clone().normalize();
+    if (view.orbit) dir.set(Math.sin(state.orbitAngle), 0.04, Math.cos(state.orbitAngle)).normalize();
+    return _camPos.copy(view.target).addScaledVector(dir, dist);
+  }
+  function updateCamera(snap) {
+    if (!state.camFree) {
+      const view = VIEWS[state.manualCam || STEPS[state.stepIndex].cam];
+      const k = snap ? 1 : 0.07;
+      camera.position.lerp(cameraGoal(view), k);
+      controls.target.lerp(view.target, k);
+    }
+    controls.update();
+    poolFloor.position.x = waterSurface.position.x = Math.round(camera.position.x);
+    poolFloor.position.z = waterSurface.position.z = Math.round(camera.position.z);
+  }
+
+  // ===========================================================================
+  // 6. OVERLAY, SIDE-CAMERA INSET, READOUTS
+  // ===========================================================================
+  function glowFor(step, j, m) {
+    if (!step.glow) return null;
+    const kind = stepKind(step);
+    if (step.glow === 'arm') return { kind, pts: [j.rSh, j.rEl, j.rWr], arc: `${Math.round(m.elbowR)}°` };
+    if (step.glow === 'shoulders') return { kind, pts: [j.lSh, j.rSh], tag: `${Math.round(Math.abs(m.roll))}°` };
+    if (step.glow === 'entry') return { kind, pts: [j.rEl, j.rWr, j.rTip] };
+    if (step.glow === 'line') return { kind, pts: [m.midSh, m.midHip, m.midAn], arc: `${Math.round(m.bodyAngle)}°` };
+    return null;
+  }
+
+  function project(v, w, h) {
+    const p = v.clone().project(camera);
+    return { x: (p.x * 0.5 + 0.5) * w, y: (-p.y * 0.5 + 0.5) * h };
+  }
+
+  // The arc is drawn where the joint appears on screen; its label is the true 3D angle.
+  function drawGlow(ctx, pts, glow, scale) {
+    const fault = glow.kind === 'fault';
+    const core = fault ? '#ff4d6d' : '#bef264', halo = fault ? '#ff1e42' : '#65a30d';
+    ctx.save();
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    const path = () => { ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke(); };
+    ctx.shadowColor = halo; ctx.shadowBlur = 22 * scale; ctx.strokeStyle = halo; ctx.lineWidth = 8.5 * scale; path();
+    ctx.shadowBlur = 10 * scale; ctx.strokeStyle = core; ctx.lineWidth = 3.8 * scale; path();
+    pts.forEach((p, i) => {
+      const vertex = glow.arc && i === 1;
+      ctx.fillStyle = vertex ? '#ffffff' : core;
+      ctx.beginPath(); ctx.arc(p.x, p.y, (vertex ? 5.5 : 4) * scale, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.shadowBlur = 6 * scale; ctx.shadowColor = 'rgba(0,0,0,0.9)';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `700 ${Math.round(13 * scale)}px "Space Mono", ui-monospace, monospace`;
+    ctx.textAlign = 'center';
+    if (glow.arc && pts.length === 3) {
+      const [p0, p1, p2] = pts;
+      const a1 = Math.atan2(p0.y - p1.y, p0.x - p1.x);
+      let diff = Math.atan2(p2.y - p1.y, p2.x - p1.x) - a1;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)'; ctx.lineWidth = 2.2 * scale;
+      ctx.setLineDash([4 * scale, 3 * scale]);
+      ctx.beginPath(); ctx.arc(p1.x, p1.y, 28 * scale, a1, a1 + diff, diff < 0); ctx.stroke();
+      ctx.setLineDash([]);
+      const mid = a1 + diff * 0.5;
+      ctx.fillText(glow.arc, p1.x + Math.cos(mid) * 46 * scale, p1.y + Math.sin(mid) * 46 * scale + 4 * scale);
+    }
+    if (glow.tag) {
+      const mx = (pts[0].x + pts[1].x) / 2, my = Math.min(pts[0].y, pts[1].y) - 16 * scale;
+      ctx.fillText(glow.tag, mx, my);
+    }
+    ctx.restore();
+  }
+
+  function renderOverlay(glow) {
+    const w = container.clientWidth, h = container.clientHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (overlayCanvas.width !== Math.round(w * dpr) || overlayCanvas.height !== Math.round(h * dpr)) {
+      overlayCanvas.width = Math.round(w * dpr); overlayCanvas.height = Math.round(h * dpr);
+    }
+    overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    overlayCtx.clearRect(0, 0, w, h);
+    if (!state.showOverlay || !glow) return;
+    drawGlow(overlayCtx, glow.pts.map(p => project(p, w, h)), glow, 1);
+  }
+
+  const pipCanvas = document.getElementById('pip-canvas');
+  const pipCtx = pipCanvas.getContext('2d');
+  function renderSideInset(j, glow, m) {
+    const W = pipCanvas.width, H = pipCanvas.height, S = W / 2.5;
+    const ctx = pipCtx;
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, '#07263b'); grad.addColorStop(1, '#020b14');
+    ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
+    const map = (v) => ({ x: W * 0.52 + (v.x + 0.1) * S, y: H * 0.40 - (v.y + 0.1) * S });
+    ctx.strokeStyle = 'rgba(34, 211, 238, 0.35)'; ctx.lineWidth = 1.5;
+    const wy = map(V(0, WATER_Y, 0)).y;
+    ctx.beginPath(); ctx.moveTo(0, wy); ctx.lineTo(W, wy); ctx.stroke();
+    ctx.lineCap = 'round'; ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 6;
+    [[j.head, j.neck], [j.neck, j.hips], [j.rSh, j.rEl], [j.rEl, j.rWr], [j.lSh, j.lEl], [j.lEl, j.lWr],
+     [j.rHip, j.rKn], [j.rKn, j.rAn], [j.rAn, j.rToe], [j.lHip, j.lKn], [j.lKn, j.lAn], [j.lAn, j.lToe]].forEach(([a, b]) => {
+      const p = map(a), q = map(b);
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
+    });
+    const hp = map(j.head.clone().lerp(j.neck, -0.6));
+    ctx.fillStyle = '#cbd5e1'; ctx.beginPath(); ctx.arc(hp.x, hp.y, 9, 0, Math.PI * 2); ctx.fill();
+    if (glow && state.showOverlay) {
+      ctx.strokeStyle = glow.kind === 'fault' ? '#ff2e4c' : '#a3e635'; ctx.lineWidth = 5;
+      ctx.beginPath();
+      glow.pts.forEach((pt, i) => { const p = map(pt); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
+      ctx.stroke();
+    }
+    void m;
+  }
+
+  // Which arm the elbow readout follows: the one in catch or pull, else entry, else push.
+  function readoutArm(th) {
+    const uR = frac(th), uL = frac(th + 0.5);
+    const rank = (u) => (u >= 0.12 && u < 0.50) ? 0 : (u < 0.12 ? 1 : (u < 0.62 ? 2 : 3));
+    return rank(uR) <= rank(uL) ? { side: 'R', u: uR } : { side: 'L', u: uL };
+  }
+  const $ = (id) => document.getElementById(id);
+  function renderReadouts(m, th) {
+    const arm = readoutArm(th);
+    const a3 = arm.side === 'R' ? m.elbowR : m.elbowL, a2 = arm.side === 'R' ? m.elbowR2D : m.elbowL2D;
+    $('hud-elbow3d').textContent = `${a3.toFixed(0)}°`;
+    $('hud-elbow-arm').textContent = `${arm.side === 'R' ? 'Right' : 'Left'} arm, ${phaseName(arm.u)}`;
+    $('hud-elbow2d').textContent = `${a2.toFixed(0)}°`;
+    const diff = a2 - a3;
+    $('hud-elbow-diff').textContent = Math.abs(diff) < 0.5 ? 'matches 3D' : `${Math.abs(diff).toFixed(0)}° ${diff > 0 ? 'over' : 'under'} the 3D angle`;
+    $('hud-roll').textContent = `${Math.abs(m.roll).toFixed(0)}°`;
+    $('hud-roll-side').textContent = Math.abs(m.roll) < 0.5 ? 'flat' : (m.roll > 0 ? 'right side up' : 'left side up');
+  }
+
+  // ===========================================================================
+  // 7. MODEL LOADING (built into this file; no network request)
+  // ===========================================================================
+  const gltfLoader = new THREE.GLTFLoader();
+  const messageEl = $('stage-message');
+  function showStageMessage(text, isError) {
+    messageEl.className = 'stage-message' + (isError ? ' error' : '') + (text ? '' : ' hidden');
+    messageEl.firstElementChild.textContent = text || '';
+  }
+  let toastTimer = null;
+  function toast(text) {
+    const el = $('toast');
+    el.textContent = text; el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 4200);
+  }
+
+  function loadBuiltInSwimmer() {
+    try {
+      const b64 = $('xbot-glb').textContent.trim();
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      gltfLoader.parse(bytes.buffer.slice(0), '', (gltf) => {
+        const r = buildRig(gltf.scene);
+        if (!r) { showStageMessage("Couldn't load the swimmer model", true); return; }
+        useRig(r);
+        showStageMessage('');
+        gltfLoader.parse(bytes.buffer.slice(0), '', (gltf2) => {
+          const second = buildRig(gltf2.scene);
+          if (second) useTargetRig(second);
+        });
+      }, (err) => { console.error(err); showStageMessage("Couldn't load the swimmer model", true); });
+    } catch (err) {
+      console.error(err);
+      showStageMessage("Couldn't load the swimmer model", true);
+    }
+  }
+
+  function loadCustomCharacter(file) {
+    if (!file) return;
+    const reject = () => toast('This character needs a Mixamo rig.');
+    file.arrayBuffer().then((buf) => {
+      try {
+        gltfLoader.parse(buf, '', (gltf) => {
+          const r = buildRig(gltf.scene);
+          if (!r) { reject(); return; }
+          useRig(r);
+          showStageMessage('');
+        }, reject);
+      } catch (err) { reject(); }
+    }).catch(reject);
+  }
+  $('btn-upload').addEventListener('click', () => $('glb-file-input').click());
+  $('glb-file-input').addEventListener('change', (e) => { loadCustomCharacter(e.target.files && e.target.files[0]); e.target.value = ''; });
+  $('btn-stroke').addEventListener('click', () => $('stroke-file-input').click());
+  $('stroke-file-input').addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (file) file.text().then(loadRealText).catch(() => toast('That stroke file could not be read.'));
+    e.target.value = '';
+  });
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!file) return;
+    if (/\.json$/i.test(file.name)) file.text().then(loadRealText).catch(() => toast('That stroke file could not be read.'));
+    else loadCustomCharacter(file);
+  });
+
+  // ===========================================================================
+  // 7b. REAL STROKE: a stroke3d.json pose, played on the same rig
+  // ===========================================================================
+  function vec3(value) {
+    if (value && value.isVector3) return value.clone();
+    return V(value && value.x || 0, value && value.y || 0, value && value.z || 0);
+  }
+  function lerpVec(a, b, u) {
+    return vec3(a).lerp(vec3(b), u);
+  }
+  function hydratePose(frame) {
+    const pose = {
+      pelvis: vec3(frame.pelvis), neck: vec3(frame.neck), a: vec3(frame.a).normalize(),
+      shF: { right: vec3(frame.shF.right).normalize(), dorsal: vec3(frame.shF.dorsal).normalize() },
+      hipF: { right: vec3(frame.hipF.right).normalize(), dorsal: vec3(frame.hipF.dorsal).normalize() },
+      headRoll: frame.headRoll || 0, roll: frame.roll || 0, hipRoll: frame.hipRoll || 0,
+      arms: {}, legs: {}
+    };
+    ['L', 'R'].forEach((side) => {
+      const arm = frame.arms[side], leg = frame.legs[side];
+      pose.arms[side] = {
+        S: vec3(arm.S), E: vec3(arm.E), W: vec3(arm.W), pole: vec3(arm.pole).normalize(),
+        wBack: arm.wBack || 0, wRelax: arm.wRelax || 0, wDown: arm.wDown == null ? 1 : arm.wDown
+      };
+      pose.legs[side] = { thigh: vec3(leg.thigh).normalize(), shin: vec3(leg.shin).normalize() };
+    });
+    return pose;
+  }
+  function sampleRealPose(t) {
+    const data = state.realData;
+    if (!data || !data.frames || !data.frames.length) return null;
+    const fps = data.fps || 30;
+    const n = data.frames.length;
+    const wrapped = ((t * fps) % n + n) % n;
+    const i0 = Math.floor(wrapped) % n;
+    const i1 = (i0 + 1) % n;
+    const u = wrapped - Math.floor(wrapped);
+    if (u < 1e-4) return hydratePose(data.frames[i0]);
+    const a = data.frames[i0], b = data.frames[i1];
+    const pose = hydratePose(a);
+    pose.pelvis.lerp(vec3(b.pelvis), u);
+    pose.neck.lerp(vec3(b.neck), u);
+    pose.a.lerp(vec3(b.a), u).normalize();
+    pose.roll += ((b.roll || 0) - (a.roll || 0)) * u;
+    pose.hipRoll += ((b.hipRoll || 0) - (a.hipRoll || 0)) * u;
+    pose.headRoll += ((b.headRoll || 0) - (a.headRoll || 0)) * u;
+    ['L', 'R'].forEach((side) => {
+      const arm = pose.arms[side], other = b.arms[side];
+      arm.S.lerp(vec3(other.S), u); arm.E.lerp(vec3(other.E), u); arm.W.lerp(vec3(other.W), u);
+      arm.pole.lerp(vec3(other.pole), u).normalize();
+      pose.legs[side].thigh.lerp(vec3(b.legs[side].thigh), u).normalize();
+      pose.legs[side].shin.lerp(vec3(b.legs[side].shin), u).normalize();
+    });
+    return pose;
+  }
+  function realDuration() {
+    const data = state.realData;
+    if (!data) return 0;
+    if (data.duration_s) return data.duration_s;
+    return data.frames.length / (data.fps || 30);
+  }
+  function setViewMode(mode) {
+    state.mode = mode;
+    state.coachCut = false;
+    ['mode-real', 'mode-side', 'mode-target'].forEach((id) => {
+      $(id).classList.toggle('primary', id === 'mode-' + mode);
+    });
+    $('btn-coach-cut').classList.remove('primary', 'active');
+    $('coach-cut-label').textContent = 'Modeled faults';
+    targetRoot.visible = mode === 'side' && !!targetRig;
+    swimmerRoot.position.z = mode === 'side' ? -0.55 : 0;
+    targetRoot.position.z = 0.55;
+    $('step-strip').style.display = 'none';
+  }
+  function rebuildRealReport() {
+    if (!rig || !state.realData) return;
+    const frames = state.realData.frames;
+    let rollMax = -1e9, rollMin = 1e9, entryMin = 1e9, hipMin = 1e9, hipMax = -1e9;
+    let catchElbow = 0, catchDepth = -1e9;
+    const step = Math.max(1, Math.floor(frames.length / 48));
+    for (let i = 0; i < frames.length; i += step) {
+      const joints = applyPose(rig, hydratePose(frames[i]));
+      const measured = measure(joints);
+      rollMax = Math.max(rollMax, measured.roll);
+      rollMin = Math.min(rollMin, measured.roll);
+      hipMin = Math.min(hipMin, measured.hipLine);
+      hipMax = Math.max(hipMax, measured.hipLine);
+      const depth = joints.rSh.y - joints.rWr.y;
+      if (depth > catchDepth) { catchDepth = depth; catchElbow = measured.elbowR; }
+      entryMin = Math.min(entryMin, measured.rWristFromCenter);
+    }
+    const target = (window.__swimformCheck && window.__swimformCheck.report && window.__swimformCheck.report.target) || {
+      catchElbow: 0, rollRight: 0, rollLeft: 0, entryCm: 0, hipLine: 0
+    };
+    fillReport({
+      you: {
+        catchElbow: catchElbow, rollRight: rollMax, rollLeft: -rollMin,
+        entryCm: entryMin * 100, hipLine: (hipMin + hipMax) / 2
+      },
+      target: target
+    });
+    $('report-head').innerHTML = '<tr><th>Check</th><th>Your real video</th><th>Target</th></tr>';
+    $('report-note').textContent = 'Measured on the rig from your clip. Roll and hand entry are estimates from one camera.';
+    document.body.dataset.realReport = '1';
+  }
+  function loadRealText(text) {
+    let data;
+    try { data = JSON.parse(text); }
+    catch (err) { toast('That file is not JSON.'); return; }
+    acceptRealStroke(data);
+  }
+  function acceptRealStroke(data) {
+    if (!data || !data.frames || !data.frames.length || !data.frames[0].arms) {
+      toast('This JSON has no stroke frames.');
+      return;
+    }
+    state.realData = data;
+    state.realTime = 0;
+    $('real-modes').hidden = false;
+    setViewMode('real');
+    if (rig) rebuildRealReport();
+    toast('Real stroke loaded. ' + data.frames.length + ' frames.');
+  }
+  ['real', 'side', 'target'].forEach((mode) => {
+    $('mode-' + mode).addEventListener('click', () => setViewMode(mode));
+  });
+  if (window.__REAL_STROKE_3D__) acceptRealStroke(window.__REAL_STROKE_3D__);
+
+  // ===========================================================================
+  // 8. REEL EXPORT: records one pass of the coach cut, or the real stroke, at 1080x1920
+  // ===========================================================================
+  const rec = { canvas: null, ctx: null, recorder: null, chunks: [], saved: null };
+  function roundRectPath(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+  function wrapText(ctx, text, maxW) {
+    const lines = []; let line = '';
+    text.split(' ').forEach(word => {
+      const t = line ? line + ' ' + word : word;
+      if (ctx.measureText(t).width > maxW && line) { lines.push(line); line = word; } else line = t;
+    });
+    if (line) lines.push(line);
+    return lines;
+  }
+  function drawReelFrame(glow) {
+    const ctx = rec.ctx, W = rec.canvas.width, H = rec.canvas.height, k = W / 368;
+    ctx.drawImage(renderer.domElement, 0, 0, W, H);
+    if (glow && state.showOverlay) drawGlow(ctx, glow.pts.map(p => project(p, W, H)), glow, k);
+    const st = (state.realData && state.mode) ? {
+      label: state.mode === 'target' ? 'Target form' : (state.mode === 'side' ? 'My stroke vs target' : 'My real stroke'),
+      sub: 'Lifted from your video. Roll and hand entry are estimates from one camera.',
+      profile: state.mode === 'target' ? 'target' : 'you'
+    } : STEPS[state.stepIndex];
+    const kind = (state.realData && state.mode) ? (state.mode === 'target' ? 'target' : 'fault') : stepKind(st);
+    const edge = kind === 'fault' ? '#ff2e4c' : (kind === 'target' ? '#a3e635' : '#22d3ee');
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = `800 ${Math.round(21 * k)}px Inter, Arial, sans-serif`;
+    const tw = ctx.measureText(st.label).width + 52 * k, th = 42 * k, ty = 44 * k;
+    ctx.save();
+    ctx.shadowColor = edge; ctx.shadowBlur = 26 * k;
+    roundRectPath(ctx, W / 2 - tw / 2, ty, tw, th, th / 2);
+    ctx.fillStyle = 'rgba(6, 12, 18, 0.92)'; ctx.fill();
+    ctx.restore();
+    ctx.lineWidth = 1.5 * k; ctx.strokeStyle = edge; ctx.stroke();
+    ctx.fillStyle = '#ffffff'; ctx.fillText(st.label, W / 2, ty + th / 2 + k);
+    ctx.font = `700 ${Math.round(10 * k)}px "Space Mono", ui-monospace, monospace`;
+    ctx.fillStyle = st.profile === 'you' ? '#fda4af' : '#bef264';
+    ctx.fillText(st.profile === 'you' ? 'YOU' : 'TARGET', W / 2, ty - 12 * k);
+    ctx.font = `600 ${Math.round(12.5 * k)}px Inter, Arial, sans-serif`;
+    const lines = wrapText(ctx, st.sub, W - 60 * k), lh = 17 * k, by = ty + th + 10 * k;
+    const bw = Math.max(...lines.map(l => ctx.measureText(l).width)) + 26 * k, bh = lines.length * lh + 10 * k;
+    roundRectPath(ctx, W / 2 - bw / 2, by, bw, bh, 12 * k);
+    ctx.fillStyle = 'rgba(3, 12, 22, 0.82)'; ctx.fill();
+    ctx.fillStyle = '#dbeafe';
+    lines.forEach((l, i) => ctx.fillText(l, W / 2, by + 5 * k + lh * (i + 0.5)));
+    ctx.textAlign = 'left';
+    ctx.font = `700 ${Math.round(10.5 * k)}px "Space Mono", ui-monospace, monospace`;
+    const bt = 'SWIMFORM AI', bwid = ctx.measureText(bt).width + 20 * k;
+    roundRectPath(ctx, 14 * k, H - 40 * k, bwid, 26 * k, 8 * k);
+    ctx.fillStyle = 'rgba(3, 12, 22, 0.85)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(34, 211, 238, 0.45)'; ctx.lineWidth = k; ctx.stroke();
+    ctx.fillStyle = '#22d3ee'; ctx.fillText(bt, 24 * k, H - 27 * k + k);
+  }
+  function startExport() {
+    if (!rig) return;
+    if (typeof MediaRecorder === 'undefined') { toast('This browser cannot record video.'); return; }
+    const mime = ['video/mp4;codecs=avc1.42E01E', 'video/webm;codecs=vp9', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t));
+    if (!mime) { toast('This browser cannot record video.'); return; }
+    rec.saved = { reel: state.reel, speed: state.speed, pixelRatio: renderer.getPixelRatio() };
+    setReel(true);
+    renderer.setPixelRatio(1080 / container.clientWidth);
+    handleResize();
+    rec.canvas = document.createElement('canvas');
+    rec.canvas.width = 1080; rec.canvas.height = 1920;
+    rec.ctx = rec.canvas.getContext('2d');
+    rec.chunks = [];
+    rec.recorder = new MediaRecorder(rec.canvas.captureStream(30), { mimeType: mime, videoBitsPerSecond: 8e6 });
+    rec.recorder.ondataavailable = (e) => { if (e.data.size) rec.chunks.push(e.data); };
+    rec.recorder.onstop = () => {
+      if (rec.cancelled) return;
+      const blob = new Blob(rec.chunks, { type: mime.split(';')[0] });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = (rec.span ? rec.span.file : 'swimform-freestyle-reel') + '.' + (mime.startsWith('video/mp4') ? 'mp4' : 'webm');
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    };
+    state.exporting = true; state.playing = true; state.speed = 1;
+    rec.cancelled = false; rec.elapsed = 0;
+    rec.real = !!(state.realData && state.mode);
+    if (rec.real) {
+      state.realTime = 0;
+      rec.span = null;
+      rec.spanSeconds = Math.min(realDuration() || 8, 12);
+    } else {
+      state.coachCut = true;
+      rec.span = exportSpan();
+      rec.spanSeconds = (rec.span.to - rec.span.from + 1) * STEP_SECONDS;
+      goToStep(rec.span.from, 0);
+    }
+    updateCamera(true);
+    rec.recorder.start(500);
+  }
+  function finishExport(cancelled) {
+    if (!state.exporting) return;
+    state.exporting = false;
+    rec.cancelled = !!cancelled;
+    try { rec.recorder.stop(); } catch (e) { /* already stopped */ }
+    renderer.setPixelRatio(rec.saved.pixelRatio);
+    state.speed = rec.saved.speed;
+    setReel(rec.saved.reel);
+    $('btn-export').textContent = 'Export reel video';
+  }
+  $('btn-export').addEventListener('click', () => state.exporting ? finishExport(true) : startExport());
+  $('cta-form').addEventListener('submit', (e) => {
+    const email = $('cta-email').value.trim();
+    if (email && !email.includes('@')) {
+      e.preventDefault();
+      toast('Enter a valid email, or leave it blank.');
+      return;
+    }
+    if (!email) $('cta-email').disabled = true;
+  });
+
+  // ===========================================================================
+  // 9. MAIN LOOP
+  // ===========================================================================
+  let lastNow = performance.now(), lastPhase = null;
+  function frame(now) {
+    requestAnimationFrame(frame);
+    const dt = Math.min((now - lastNow) / 1000, state.exporting ? 0.5 : 0.1);   // a recording keeps real time
+    lastNow = now;
+    uTime.value += dt;
+
+    if (state.playing) {
+      if (state.realData && state.mode) {
+        state.realTime += dt * state.speed;
+        const dur = realDuration();
+        if (dur > 0 && state.realTime >= dur) state.realTime %= dur;
+      }
+      state.tau += dt * state.speed;
+      if (state.coachCut && !(state.realData && state.mode)) {
+        if (state.exporting) {
+          rec.elapsed += dt;
+          const spanSeconds = rec.spanSeconds || ((rec.span.to - rec.span.from + 1) * STEP_SECONDS);
+          $('btn-export').textContent = `Recording ${Math.min(rec.elapsed, spanSeconds).toFixed(0)}s / ${spanSeconds.toFixed(0)}s (cancel)`;
+          if (rec.real && rec.elapsed >= spanSeconds) { finishExport(false); state.realTime = 0; }
+        }
+        while (state.tau >= STEP_SECONDS) {
+          const endStep = state.exporting ? rec.span.to : STEPS.length - 1;
+          if (state.exporting && state.stepIndex === endStep) { finishExport(false); state.tau = 0; renderStepUI(); break; }
+          state.tau -= STEP_SECONDS;
+          state.stepIndex = state.exporting
+            ? Math.min(state.stepIndex + 1, rec.span.to)
+            : (state.stepIndex + 1) % STEPS.length;
+          renderStepUI();
+        }
+        if (STEPS[state.stepIndex].cam === 'orbit') state.orbitAngle += dt * state.speed * 0.22;
+      }
+    }
+
+    const step = STEPS[state.stepIndex];
+    const th = strokePhase(step, state.tau);
+
+    // water, floor and particles move with the stroke (and rewind with it)
+    if (lastPhase !== null) {
+      const dPhase = Math.abs(th - lastPhase) < 0.5 ? th - lastPhase : 0;
+      const dx = dPhase * 2.0;
+      uSwimOffset.value += dx;
+      const attr = particleGeo.getAttribute('position');
+      for (let i = 0; i < PARTICLES; i++) {
+        let px = attr.getX(i) - dx;
+        if (px < -3) px += 6; else if (px > 3) px -= 6;
+        attr.setX(i, px);
+      }
+      attr.needsUpdate = true;
+    }
+    lastPhase = th;
+
+    let joints = null, m = null, glow = null;
+    if (rig && state.realData && state.mode) {
+      const realPose = sampleRealPose(state.realTime);
+      const targetPose = computePose('target', (state.realTime / STROKE_PERIOD) % 1, rig.torsoLen);
+      if (state.mode === 'target') joints = applyPose(rig, targetPose);
+      else joints = applyPose(rig, realPose);
+      if (state.mode === 'side' && targetRig) applyPose(targetRig, targetPose);
+      m = measure(joints);
+      glow = null;
+    } else if (rig) {
+      joints = applyPose(rig, computePose(step.profile, th, rig.torsoLen));
+      m = measure(joints);
+      glow = glowFor(step, joints, m);
+    }
+
+    updateCamera(false);
+    const realClock = state.realData && state.mode;
+    const T = realClock ? state.realTime : state.stepIndex * STEP_SECONDS + (state.tau % STEP_SECONDS);
+    const total = realClock ? (realDuration() || 1) : TOTAL_SECONDS;
+    $('scrubber').value = Math.round((T / total) * 1000);
+    $('time-readout').textContent = `${T.toFixed(1)}s / ${total.toFixed(1)}s`;
+
+    renderer.render(scene, camera);
+    renderOverlay(glow);
+    if (state.exporting) drawReelFrame(glow);
+    if (joints && !state.reel) { renderSideInset(joints, glow, m); renderReadouts(m, th); }
+  }
+
+  renderStepUI();
+  updateCamera(true);
+  loadBuiltInSwimmer();
+  requestAnimationFrame(frame);
+
+  // test hooks
+  window.__swimform = {
+    state, cam: camera, trunkUniforms, STEPS, goToStep, setReel, measure, computePose, applyPose,
+    strokePhase, sampleRealPose, setViewMode, acceptRealStroke,
+    get rig() { return rig; }, updateCamera
+  };
+  </script>
+</body>
+</html>

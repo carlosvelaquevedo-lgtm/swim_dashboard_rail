@@ -17,6 +17,14 @@ def should_persist_report(normalized_ok, coverage_ok, framing_blocked=False):
     return bool(normalized_ok and coverage_ok and not framing_blocked)
 
 
+def should_write_lab_credit(gates_passed, access, is_admin=False):
+    """A paid 3D credit is spent only after all three gates pass.
+
+    A free demo, an admin test, and a failed gate leave no meta.json.
+    """
+    return bool(gates_passed and access == "paid" and not is_admin)
+
+
 def sample_fractions():
     return (0.25, 0.50, 0.75)
 

@@ -1,0 +1,14 @@
+# Keep secrets, git metadata, and local backups out of the image.
+# .env is gitignored but was previously committed; COPY . . would still
+# bake a local .env into the image if one is present at build time.
+.env
+.git
+__pycache__
+*.pyc
+*.pyo
+*.bak
+._*
+.devcontainer
+*.md
+app_backup.py
+modal_3d
