@@ -8,6 +8,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import urllib.request
 
 import streamlit as st
@@ -24,20 +25,68 @@ from ingest import (
     upload_suffix,
     write_upload_to_temp,
 )
-from results_store import load_bytes, persistence_enabled, result_is_saved, send_report_link, write_result
+from results_store import (
+    begin_paid_lift,
+    load_bytes,
+    persistence_enabled,
+    release_lab_lock,
+    result_is_saved,
+    send_report_link,
+    write_result,
+)
 from video_preflight import (
     ANALYSIS_WINDOW_MAX,
     ANALYSIS_WINDOW_MIN,
+    UNREADABLE_CLIP_LENGTH,
+    consume_paid_access,
+    lift_duration_seconds,
     should_write_lab_credit,
 )
 
-VIEWER_PATH = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "viewer", "swimform_freestyle_3d.html"))
+APP_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
+VIEWER_PATH = os.path.join(APP_ROOT, "viewer", "swimform_freestyle_3d.html")
+STATIC_DIR = os.path.join(APP_ROOT, "static")
+STATIC_VIEWER_NAME = "swimform_freestyle_3d.html"
 IS_DEV = os.environ.get("IS_DEV", "false").lower() == "true"
 
 
 def _viewer_html():
     with open(VIEWER_PATH, encoding="utf-8") as handle:
         return handle.read()
+
+
+def _ensure_static_viewer():
+    """Copy the built viewer into static/ once, so reruns do not resend the file."""
+    os.makedirs(STATIC_DIR, exist_ok=True)
+    dest = os.path.join(STATIC_DIR, STATIC_VIEWER_NAME)
+    if not os.path.isfile(VIEWER_PATH):
+        return dest
+    if not os.path.isfile(dest) or os.path.getmtime(VIEWER_PATH) > os.path.getmtime(dest):
+        shutil.copyfile(VIEWER_PATH, dest)
+    return dest
+
+
+def _viewer_href(stroke=None):
+    _ensure_static_viewer()
+    if stroke is None:
+        return "/app/static/" + STATIC_VIEWER_NAME
+    blob = json.dumps(stroke).replace("</", "<\\/")
+    name = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:24] + ".html"
+    folder = os.path.join(STATIC_DIR, "strokes")
+    os.makedirs(folder, exist_ok=True)
+    dest = os.path.join(folder, name)
+    if not os.path.isfile(dest):
+        html = _viewer_html()
+        html = html.replace(
+            "<body>",
+            "<body><script>window.__REAL_STROKE_3D__ = " + blob + ";</script>",
+            1,
+        )
+        tmp = dest + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(html)
+        os.replace(tmp, dest)
+    return "/app/static/strokes/" + name
 
 
 def _show_viewer(stroke=None):
@@ -52,59 +101,16 @@ def _show_viewer(stroke=None):
     components.html(
         """
         <p style="font-family:sans-serif;color:#94a3b8;font-size:14px;margin:0;">
-          If the viewer above stays blank, use the button in the page to open the same file.
+          If the viewer above stays blank, use the link on the page to open the same file.
         </p>
         """,
         height=48,
     )
-    st.download_button(
-        "Open the 3D viewer in a new tab",
-        data=html.encode("utf-8"),
-        file_name="swimform_freestyle_3d.html",
-        mime="text/html",
-        help="Phones sometimes will not load the viewer inside the page. Open this file in a new tab.",
+    href = _viewer_href(stroke)
+    st.markdown(
+        '<a href="' + href + '" target="_blank" rel="noopener noreferrer">Open the 3D viewer in a new tab</a>',
+        unsafe_allow_html=True,
     )
-
-
-def _cache_file(digest):
-    root = os.environ.get("SWIMFORM_RESULTS_DIR", "")
-    if not root:
-        return None
-    folder = os.path.join(root, "lab3d-cache")
-    os.makedirs(folder, exist_ok=True)
-    return os.path.join(folder, digest + ".json")
-
-
-def _cached_lift(digest):
-    memory = st.session_state.setdefault("lab_gpu_cache", {})
-    if digest in memory:
-        return memory[digest]
-    path = _cache_file(digest)
-    if path and os.path.exists(path):
-        with open(path, encoding="utf-8") as handle:
-            payload = json.load(handle)
-        memory[digest] = payload
-        return payload
-    return None
-
-
-def _store_lift(digest, payload):
-    st.session_state.setdefault("lab_gpu_cache", {})[digest] = payload
-    path = _cache_file(digest)
-    if not path:
-        return
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle)
-    os.replace(tmp, path)
-
-
-def _sha256(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _call_modal(mp4_bytes, model_size):
@@ -153,6 +159,7 @@ def _save_paid(stroke):
         "email": st.session_state.get("customer_email", ""),
     })
     send_report_link(session_id, st.session_state.get("customer_email", ""))
+    consume_paid_access(st.session_state)
 
 
 def _render_result(payload):
@@ -242,8 +249,10 @@ def _upload_and_lift():
     if meta.get("is_gopro"):
         undistort = st.checkbox("GoPro wide-lens undistort", value=False)
     start_s = 0.0
-    duration_s = None
-    video_duration = meta.get("duration") or 0
+    video_duration = lift_duration_seconds(meta.get("duration"))
+    if video_duration is None:
+        st.error(UNREADABLE_CLIP_LENGTH)
+        return
     if video_duration > ANALYSIS_WINDOW_MAX:
         window = st.slider(
             "Stroke window length (seconds)",
@@ -261,6 +270,8 @@ def _upload_and_lift():
                 st.caption(label)
                 if jpeg:
                     st.image(jpeg)
+    else:
+        duration_s = min(video_duration, ANALYSIS_WINDOW_MAX)
     model_size = "base"
     if admin:
         model_size = st.selectbox("ViTPose size", ["base", "huge"], index=0)
@@ -286,33 +297,52 @@ def _upload_and_lift():
     if not ok:
         st.error("Could not normalize this file, so it was not sent to the GPU. " + message)
         return
-    digest = _sha256(out)
-    cached = _cached_lift(digest)
-    if cached:
-        st.caption("This exact clip was already lifted. Showing the saved result.")
-        _render_result(cached)
-        try:
-            os.unlink(out)
-        except OSError:
-            pass
-        return
     with open(out, "rb") as handle:
         mp4 = handle.read()
     try:
         os.unlink(out)
     except OSError:
         pass
-    with st.spinner("Lifting the stroke…"):
-        try:
-            payload = _call_modal(mp4, model_size)
-        except Exception as exc:
-            st.error("The 3D service did not answer (" + type(exc).__name__ + "). Nothing was saved.")
+    paid = st.session_state.get("lab_access") == "paid" and not admin
+    sid = st.session_state.get("active_session_id")
+    locked = False
+    if paid:
+        if not sid:
+            st.error("This payment has no session, so the clip was not sent.")
             return
-    if payload.get("error") and not payload.get("gates"):
-        st.error(payload["error"])
-        return
-    _store_lift(digest, payload)
-    _render_result(payload)
+        status = begin_paid_lift(sid)
+        if status == "saved":
+            _show_saved(sid)
+            return
+        if status != "lift":
+            st.error(
+                "An analysis for this payment is already running. "
+                "If it was interrupted, open the same link again in 15 minutes."
+            )
+            return
+        locked = True
+    try:
+        with st.spinner("Lifting the stroke…"):
+            try:
+                payload = _call_modal(mp4, model_size)
+            except Exception as exc:
+                st.error("The 3D service did not answer (" + type(exc).__name__ + "). Nothing was saved.")
+                return
+        if payload.get("error") and not payload.get("gates"):
+            st.error(payload["error"])
+            return
+        _render_result(payload)
+    finally:
+        if locked:
+            release_lab_lock(sid)
+
+
+def _show_saved(session_id):
+    raw = load_bytes(session_id, "stroke3d.json")
+    if raw:
+        _show_viewer(json.loads(raw.decode("utf-8")))
+    else:
+        st.info("The saved 3D file could not be opened.")
 
 
 access = st.session_state.get("lab_access")
@@ -324,12 +354,8 @@ elif access in ("admin", "paid") or (IS_DEV and st.session_state.get("report_mod
     if access == "admin" or IS_DEV:
         st.caption("Admin test. Uploads are not charged. Gate numbers are shown in full.")
     saved_id = st.session_state.get("active_session_id")
-    if access == "paid" and saved_id and st.session_state.get("view_saved_report"):
-        raw = load_bytes(saved_id, "stroke3d.json")
-        if raw:
-            _show_viewer(json.loads(raw.decode("utf-8")))
-        else:
-            st.info("The saved 3D file could not be opened.")
+    if access == "paid" and saved_id and result_is_saved(saved_id):
+        _show_saved(saved_id)
     else:
         _upload_and_lift()
 else:

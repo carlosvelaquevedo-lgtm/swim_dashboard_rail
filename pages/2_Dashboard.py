@@ -40,6 +40,7 @@ from video_preflight import (
     framing_verdict,
     next_timestamp,
     sample_times,
+    dashboard_checkout_action,
     should_persist_report,
     should_probe_tiles,
     span_fraction,
@@ -146,6 +147,15 @@ elif not st.session_state.get("paid", False):
         if session_id in used and not result_is_saved(session_id):
             st.session_state["paid"] = False
         elif verify_stripe_payment(session_id):
+            action, lab_link = dashboard_checkout_action(
+                st.session_state.get("report_mode"),
+                session_id,
+                lambda: None,
+            )
+            if action == "lab":
+                st.info("This payment is for the 3D Stroke Lab, so this page will not analyze it.")
+                st.markdown("**[Open the 3D Lab](" + lab_link + ")**")
+                st.stop()
             st.session_state["paid"] = True
             st.session_state["active_session_id"] = session_id
             st.session_state["is_admin_session"] = False

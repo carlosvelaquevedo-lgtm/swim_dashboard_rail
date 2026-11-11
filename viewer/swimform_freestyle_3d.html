@@ -5888,6 +5888,7 @@
       swimmerRoot.position.z = 0;
       $('step-strip').style.display = '';
       ['mode-real', 'mode-side', 'mode-target'].forEach((id) => $(id).classList.remove('primary'));
+      showModeledFaultCopy(true);
       state.playing = true;
       goToStep(state.stepIndex, state.tau % STEP_SECONDS);
       return;
@@ -6209,6 +6210,12 @@
     if (data.duration_s) return data.duration_s;
     return data.frames.length / (data.fps || 30);
   }
+  function showModeledFaultCopy(show) {
+    const display = show ? '' : 'none';
+    document.querySelector('.top-pill-container').style.display = display;
+    document.querySelector('.intro-bar p').style.display = display;
+    document.querySelector('.panel-card .panel-sub').style.display = display;
+  }
   function setViewMode(mode) {
     state.mode = mode;
     state.coachCut = false;
@@ -6221,6 +6228,7 @@
     swimmerRoot.position.z = mode === 'side' ? -0.55 : 0;
     targetRoot.position.z = 0.55;
     $('step-strip').style.display = 'none';
+    showModeledFaultCopy(mode === 'target');
   }
   function rebuildRealReport() {
     if (!rig || !state.realData) return;
@@ -6268,6 +6276,7 @@
     state.realTime = 0;
     $('real-modes').hidden = false;
     setViewMode('real');
+    showModeledFaultCopy(false);
     if (rig) rebuildRealReport();
     toast('Real stroke loaded. ' + data.frames.length + ' frames.');
   }

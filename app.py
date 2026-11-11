@@ -529,12 +529,6 @@ def show_landing_page():
             st.session_state.paid = True
             st.session_state.report_mode = "coach"
             st.rerun()
-        if st.button("Developer: Open 3D Lab", use_container_width=True):
-            st.session_state.paid = True
-            st.session_state.is_admin_session = True
-            st.session_state.report_mode = "lab3d"
-            st.session_state.lab_access = "admin"
-            st.switch_page("pages/3_3D_Lab.py")
 
     # --- 4. The Analysis Engine (Full Restore) ---
     st.markdown('<h2 style="text-align:center; font-size:2.5rem; margin:60px 0 40px; position: relative; z-index: 1;">The Analysis Engine</h2>', unsafe_allow_html=True)

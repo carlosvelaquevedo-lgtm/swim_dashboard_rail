@@ -5,3 +5,7 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# Viewer bytes served by Streamlit. Copied from viewer/ at runtime.
+static/swimform_freestyle_3d.html
+static/strokes/
