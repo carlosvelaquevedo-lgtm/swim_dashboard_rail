@@ -7,6 +7,8 @@ from html import escape as html_escape
 
 from dotenv import load_dotenv
 from analytics import track
+from payments import retrieve_paid_checkout, valid_session_id
+from results_store import read_meta, result_is_saved
 
 load_dotenv()
 
@@ -583,23 +585,29 @@ if checkout_tier in ("swimmer", "coach"):
 
 if "session_id" in q and not st.session_state.paid:
     session_id = q.get("session_id")
-    try:
-        session = stripe.checkout.Session.retrieve(session_id)
-        if session.payment_status == "paid":
+    if not valid_session_id(session_id):
+        st.error("This payment link is not valid.")
+        st.stop()
+    # Keep ?session_id in the URL. A saved report opens without spending the
+    # credit again; a paid checkout with no meta.json can still be analyzed.
+    st.session_state.active_session_id = session_id
+    if result_is_saved(session_id):
+        meta = read_meta(session_id) or {}
+        st.session_state.report_mode = meta.get("report_mode", "swimmer")
+        st.session_state.view_saved_report = True
+    else:
+        paid, mode, email = retrieve_paid_checkout(session_id)
+        if paid:
             st.session_state.paid = True
-            st.session_state.report_mode = session.metadata.get("report_mode", "swimmer")
-            st.query_params.clear()
-            st.query_params["verified"] = session_id
+            st.session_state.report_mode = mode
+            if email:
+                st.session_state.customer_email = email
             st.balloons()
-            st.rerun()
         else:
             st.warning("Payment not completed. Please try again.")
             st.query_params.clear()
-    except Exception:
-        st.error("Could not verify payment. Please contact support.")
-        st.query_params.clear()
 
-if st.session_state.paid:
+if st.session_state.paid or st.session_state.get("view_saved_report"):
     st.switch_page("pages/2_Dashboard.py")
 else:
     show_landing_page()
