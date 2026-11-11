@@ -135,6 +135,68 @@ def release_lock(session_id: str) -> None:
         pass
 
 
+def _lab_lock_path(session_id: str) -> str:
+    """SWIMFORM_RESULTS_DIR/<session_id>.lock, beside the session folder."""
+    if not valid_session_id(session_id):
+        raise ValueError("invalid session id")
+    path = os.path.join(_root(), session_id + ".lock")
+    if os.path.dirname(os.path.normpath(path)) != os.path.normpath(_root()):
+        raise ValueError("invalid session id")
+    return path
+
+
+def acquire_lab_lock(session_id: str, now: float = None) -> bool:
+    """False when a report exists, the results dir is unset, or a fresh lock is held.
+
+    A lock older than 15 minutes is removed so a crashed lift can be retried.
+    This file is not the 2D session lock.
+    """
+    if not persistence_enabled() or not valid_session_id(session_id):
+        return False
+    if result_is_saved(session_id):
+        return False
+    os.makedirs(_root(), exist_ok=True)
+    lock_path = _lab_lock_path(session_id)
+    now = time.time() if now is None else now
+    if os.path.exists(lock_path):
+        try:
+            with open(lock_path) as handle:
+                started = float(handle.read().strip())
+        except (OSError, ValueError):
+            started = os.path.getmtime(lock_path)
+        if now - started < LOCK_STALE_SECONDS:
+            return False
+        try:
+            os.unlink(lock_path)
+        except OSError:
+            return False
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w") as handle:
+        handle.write(str(now))
+    return True
+
+
+def release_lab_lock(session_id: str) -> None:
+    if not persistence_enabled() or not valid_session_id(session_id):
+        return
+    try:
+        os.unlink(_lab_lock_path(session_id))
+    except OSError:
+        pass
+
+
+def begin_paid_lift(session_id: str, now: float = None) -> str:
+    """saved, busy, or lift. lift means this process holds the session lock."""
+    if result_is_saved(session_id):
+        return "saved"
+    if not acquire_lab_lock(session_id, now=now):
+        return "busy"
+    return "lift"
+
+
 def write_result(session_id: str, files: dict, meta: dict) -> None:
     """Write artifacts, then meta.json last. No meta.json means the credit is unused."""
     if not persistence_enabled():

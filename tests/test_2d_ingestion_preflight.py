@@ -226,6 +226,10 @@ class TrackingGeometryTests(unittest.TestCase):
         self.assertFalse(pre.should_persist_report(True, False))
         self.assertFalse(pre.should_persist_report(True, True, framing_blocked=True))
         self.assertTrue(pre.should_persist_report(True, True))
+        self.assertTrue(pre.should_write_lab_credit(True, "paid", False))
+        self.assertFalse(pre.should_write_lab_credit(False, "paid", False))
+        self.assertFalse(pre.should_write_lab_credit(True, "demo", False))
+        self.assertFalse(pre.should_write_lab_credit(True, "paid", True))
 
     def test_write_is_gated_by_the_persist_helper(self):
         def attempt(normalized_ok, coverage_ok, framing_blocked=False):

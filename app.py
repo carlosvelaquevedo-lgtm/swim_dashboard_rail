@@ -115,6 +115,7 @@ import stripe
 STRIPE_PAYMENT_LINK       = os.environ.get("STRIPE_PAYMENT_LINK", "")
 STRIPE_PAYMENT_LINK_COACH = os.environ.get("STRIPE_PAYMENT_LINK_COACH", "")
 STRIPE_PAYMENT_LINK_FOUNDING = os.environ.get("STRIPE_PAYMENT_LINK_FOUNDING", "")
+STRIPE_PAYMENT_LINK_3D = os.environ.get("STRIPE_PAYMENT_LINK_3D", "")
 POSTHOG_PUBLIC_KEY = os.environ.get("POSTHOG_PUBLIC_KEY", "")
 POSTHOG_HOST = os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com")
 STRIPE_SECRET_KEY         = os.environ.get("STRIPE_SECRET_KEY", "")
@@ -461,6 +462,24 @@ def show_landing_page():
 </div>
 """, unsafe_allow_html=True)
 
+    if STRIPE_PAYMENT_LINK_3D:
+        st.markdown("""
+<div class="pricing-grid">
+    <div class="pricing-card coach">
+        <div class="badge">BETA</div>
+        <div class="price-label">3D STROKE LAB</div>
+        <div class="price-sub">The price is on the checkout page</div>
+        <ul class="feature-list">
+            <li>Your own freestyle, lifted into 3D</li>
+            <li>Side by side with the target stroke</li>
+            <li>Three checks before a report is saved</li>
+            <li>If those checks fail, the credit stays unused</li>
+        </ul>
+        <a class="cta-btn primary" href="?checkout=lab3d" style="display:inline-block;padding:12px 18px;border-radius:12px;background:linear-gradient(135deg,#06b6d4,#0891b2);color:white;font-weight:700;text-decoration:none;">Open 3D Stroke Lab</a>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
     swimmer_link = STRIPE_PAYMENT_LINK_FOUNDING if STRIPE_PAYMENT_LINK_FOUNDING else STRIPE_PAYMENT_LINK
     swimmer_price_label = "0.99_launch" if STRIPE_PAYMENT_LINK_FOUNDING else "4.99"
 
@@ -498,6 +517,12 @@ def show_landing_page():
             st.info("Swimmer payment link not configured.")
         if not STRIPE_PAYMENT_LINK_COACH:
             st.info("Coach payment link not configured.")
+
+    st.markdown("""
+<div style="text-align:center;margin:8px 0 28px;position:relative;z-index:1;">
+  <a href="?demo=3d" style="display:inline-block;padding:12px 18px;border-radius:12px;border:1px solid rgba(34,211,238,0.45);color:#22d3ee;font-weight:700;text-decoration:none;">Try Interactive 3D Demo (Free)</a>
+</div>
+""", unsafe_allow_html=True)
 
     if IS_DEV:
         if st.button("Developer: Skip to Dashboard", use_container_width=True):
@@ -543,20 +568,29 @@ def show_landing_page():
 # =============================================
 q = st.query_params
 
+if str(q.get("demo", "") or "").strip().lower() == "3d":
+    st.session_state.lab_access = "demo"
+    st.switch_page("pages/3_3D_Lab.py")
+
 # Admin bypass (secret token in URL)
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 ADMIN_TOKEN_2 = os.environ.get("ADMIN_TOKEN_2", "")
 valid_tokens = [t for t in [ADMIN_TOKEN, ADMIN_TOKEN_2] if t]
 if valid_tokens and q.get("admin") in valid_tokens:
     st.session_state.paid = True
-    st.session_state.report_mode = "coach"
+    st.session_state.is_admin_session = True
+    if str(q.get("mode", "") or "").strip().lower() == "lab3d":
+        st.session_state.report_mode = "lab3d"
+        st.session_state.lab_access = "admin"
+    else:
+        st.session_state.report_mode = "coach"
     st.query_params.clear()
     st.query_params["verified"] = "admin"
     st.rerun()
 
 # Server-side checkout click-through: POST lands here, we track then redirect to Stripe
 checkout_tier = str(q.get("checkout", "") or "").strip().lower()
-if checkout_tier in ("swimmer", "coach"):
+if checkout_tier in ("swimmer", "coach", "lab3d"):
     swimmer_base = STRIPE_PAYMENT_LINK_FOUNDING if STRIPE_PAYMENT_LINK_FOUNDING else STRIPE_PAYMENT_LINK
     swimmer_price = "0.99_launch" if STRIPE_PAYMENT_LINK_FOUNDING else "4.99"
     if checkout_tier == "swimmer":
@@ -569,6 +603,13 @@ if checkout_tier in ("swimmer", "coach"):
             "checkout_clicked",
             {"tier": "swimmer", "price": swimmer_price, "destination": "stripe"},
         )
+    elif checkout_tier == "lab3d":
+        if not STRIPE_PAYMENT_LINK_3D:
+            st.error("3D Stroke Lab checkout is not configured.")
+            st.query_params.clear()
+            st.stop()
+        dest = _add_utm(STRIPE_PAYMENT_LINK_3D, "lab3d")
+        track("checkout_clicked", {"tier": "lab3d", "destination": "stripe"})
     else:
         if not STRIPE_PAYMENT_LINK_COACH:
             st.error("Coach payment link not configured.")
@@ -594,12 +635,16 @@ if "session_id" in q and not st.session_state.paid:
     if result_is_saved(session_id):
         meta = read_meta(session_id) or {}
         st.session_state.report_mode = meta.get("report_mode", "swimmer")
+        if st.session_state.report_mode == "lab3d":
+            st.session_state.lab_access = "paid"
         st.session_state.view_saved_report = True
     else:
         paid, mode, email = retrieve_paid_checkout(session_id)
         if paid:
             st.session_state.paid = True
             st.session_state.report_mode = mode
+            if mode == "lab3d":
+                st.session_state.lab_access = "paid"
             if email:
                 st.session_state.customer_email = email
             st.balloons()
@@ -608,6 +653,8 @@ if "session_id" in q and not st.session_state.paid:
             st.query_params.clear()
 
 if st.session_state.paid or st.session_state.get("view_saved_report"):
+    if st.session_state.get("report_mode") == "lab3d":
+        st.switch_page("pages/3_3D_Lab.py")
     st.switch_page("pages/2_Dashboard.py")
 else:
     show_landing_page()

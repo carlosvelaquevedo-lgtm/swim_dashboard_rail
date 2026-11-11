@@ -20,7 +20,9 @@ def valid_session_id(session_id: str) -> bool:
 def report_mode_from_checkout(session) -> str:
     metadata = getattr(session, "metadata", None) or {}
     mode = metadata.get("report_mode") if hasattr(metadata, "get") else None
-    if mode in ("swimmer", "coach"):
+    # lab3d is checked before the amount fallback. A checkout of $5 or more
+    # would otherwise be labeled coach, and amount alone never means 3D.
+    if mode in ("swimmer", "coach", "lab3d"):
         return mode
     try:
         amount = int(getattr(session, "amount_total", 0) or 0)

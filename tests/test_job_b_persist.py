@@ -24,6 +24,10 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(payments.report_mode_from_checkout(by_amount), "coach")
         swimmer = SimpleNamespace(metadata={}, amount_total=99, customer_details={"email": "s@b.co"})
         self.assertEqual(payments.report_mode_from_checkout(swimmer), "swimmer")
+        lab = SimpleNamespace(metadata={"report_mode": "lab3d"}, amount_total=2500, customer_details=None)
+        self.assertEqual(payments.report_mode_from_checkout(lab), "lab3d")
+        pricey = SimpleNamespace(metadata={}, amount_total=2500, customer_details=None)
+        self.assertEqual(payments.report_mode_from_checkout(pricey), "coach")
         self.assertEqual(payments.email_from_checkout(by_amount), "a@b.co")
         self.assertEqual(payments.email_from_checkout(swimmer), "s@b.co")
 
